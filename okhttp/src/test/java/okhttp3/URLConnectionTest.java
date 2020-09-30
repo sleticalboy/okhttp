@@ -38,6 +38,7 @@ import java.net.UnknownHostException;
 import java.security.KeyStore;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -62,12 +63,13 @@ import javax.net.ssl.X509TrustManager;
 import okhttp3.internal.Internal;
 import okhttp3.internal.RecordingAuthenticator;
 import okhttp3.internal.RecordingOkAuthenticator;
-import okhttp3.internal.Version;
 import okhttp3.internal.platform.Platform;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import okhttp3.mockwebserver.SocketPolicy;
+import okhttp3.testing.Flaky;
+import okhttp3.testing.PlatformRule;
 import okhttp3.tls.HandshakeCertificates;
 import okio.Buffer;
 import okio.BufferedSink;
@@ -83,6 +85,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import static java.net.HttpURLConnection.HTTP_MOVED_TEMP;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.asList;
 import static java.util.Locale.US;
@@ -90,6 +93,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static okhttp3.internal.Internal.addHeaderLenient;
 import static okhttp3.internal.Util.immutableListOf;
+import static okhttp3.internal.Util.userAgent;
 import static okhttp3.internal.http.StatusLine.HTTP_PERM_REDIRECT;
 import static okhttp3.internal.http.StatusLine.HTTP_TEMP_REDIRECT;
 import static okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST;
@@ -112,12 +116,12 @@ public final class URLConnectionTest {
   @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
 
   private HandshakeCertificates handshakeCertificates = localhost();
-  private OkHttpClient client;
+  private OkHttpClient client = clientTestRule.newClient();
   private @Nullable Cache cache;
 
   @Before public void setUp() {
+    platform.assumeNotBouncyCastle();
     server.setProtocolNegotiationEnabled(false);
-    client = clientTestRule.newClient();
   }
 
   @After public void tearDown() throws Exception {
@@ -152,25 +156,25 @@ public final class URLConnectionTest {
       new Request.Builder()
           .header(null, "j");
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
     try {
       new Request.Builder()
           .addHeader(null, "k");
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
     try {
       new Request.Builder()
           .addHeader("NullValue", null);
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
     try {
       new Request.Builder()
           .addHeader("AnotherNullValue", null);
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
 
     Response response = getResponse(request);
@@ -207,7 +211,7 @@ public final class URLConnectionTest {
     try {
       response.header(null);
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
     Headers responseHeaders = response.headers();
     assertThat(new LinkedHashSet<>(responseHeaders.values("A"))).isEqualTo(
@@ -684,7 +688,10 @@ public final class URLConnectionTest {
    *
    * http://code.google.com/p/android/issues/detail?id=13178
    */
+  @Flaky
   @Test public void connectViaHttpsToUntrustedServer() throws Exception {
+    // Flaky https://github.com/square/okhttp/issues/5222
+
     server.useHttps(handshakeCertificates.sslSocketFactory(), false);
     server.enqueue(new MockResponse()); // unused
 
@@ -692,7 +699,10 @@ public final class URLConnectionTest {
       getResponse(newRequest("/foo"));
       fail();
     } catch (SSLHandshakeException expected) {
-      assertThat(expected.getCause()).isInstanceOf(CertificateException.class);
+      // Allow conscrypt to fail in different ways
+      if (!platform.isConscrypt()) {
+        assertThat(expected.getCause()).isInstanceOf(CertificateException.class);
+      }
     }
     assertThat(server.getRequestCount()).isEqualTo(0);
   }
@@ -992,7 +1002,7 @@ public final class URLConnectionTest {
     RecordedRequest connect = server.takeRequest();
     assertThat(connect.getHeader("Private")).isNull();
     assertThat(connect.getHeader("Proxy-Authorization")).isNull();
-    assertThat(connect.getHeader("User-Agent")).isEqualTo(Version.userAgent);
+    assertThat(connect.getHeader("User-Agent")).isEqualTo(userAgent);
     assertThat(connect.getHeader("Host")).isEqualTo("android.com:443");
     assertThat(connect.getHeader("Proxy-Connection")).isEqualTo("Keep-Alive");
 
@@ -1015,7 +1025,7 @@ public final class URLConnectionTest {
         .setBody("A"));
 
     client = client.newBuilder()
-        .proxyAuthenticator(new JavaNetAuthenticator())
+        .proxyAuthenticator(okhttp3.Authenticator.JAVA_NET_AUTHENTICATOR)
         .proxy(server.toProxyAddress())
         .sslSocketFactory(
             handshakeCertificates.sslSocketFactory(), handshakeCertificates.trustManager())
@@ -2012,7 +2022,7 @@ public final class URLConnectionTest {
 
   private void testRedirected(TransferKind transferKind, boolean reuse) throws Exception {
     MockResponse mockResponse = new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: /foo");
     transferKind.setBody(mockResponse, "This page has moved!", 10);
     server.enqueue(mockResponse);
@@ -2036,7 +2046,7 @@ public final class URLConnectionTest {
   @Test public void redirectedOnHttps() throws Exception {
     server.useHttps(handshakeCertificates.sslSocketFactory(), false);
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: /foo")
         .setBody("This page has moved!"));
     server.enqueue(new MockResponse()
@@ -2062,7 +2072,7 @@ public final class URLConnectionTest {
   @Test public void notRedirectedFromHttpsToHttp() throws Exception {
     server.useHttps(handshakeCertificates.sslSocketFactory(), false);
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: http://anyhost/foo")
         .setBody("This page has moved!"));
 
@@ -2079,7 +2089,7 @@ public final class URLConnectionTest {
 
   @Test public void notRedirectedFromHttpToHttps() throws Exception {
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: https://anyhost/foo")
         .setBody("This page has moved!"));
 
@@ -2097,7 +2107,7 @@ public final class URLConnectionTest {
 
     server.useHttps(handshakeCertificates.sslSocketFactory(), false);
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: " + server2.url("/").url())
         .setBody("This page has moved!"));
 
@@ -2118,7 +2128,7 @@ public final class URLConnectionTest {
         .setBody("This is secure HTTPS!"));
 
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: " + server2.url("/").url())
         .setBody("This page has moved!"));
 
@@ -2158,7 +2168,7 @@ public final class URLConnectionTest {
         .setBody("This is the 2nd server, again!"));
 
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: " + server2.url("/").url().toString())
         .setBody("This page has moved!"));
     server.enqueue(new MockResponse()
@@ -2204,7 +2214,7 @@ public final class URLConnectionTest {
         .setBody("This is the 2nd server!"));
 
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: " + server2.url("/b").toString())
         .setBody("This page has moved!"));
 
@@ -2244,7 +2254,7 @@ public final class URLConnectionTest {
   }
 
   @Test public void response302MovedTemporarilyWithPost() throws Exception {
-    testResponseRedirectedWithPost(HttpURLConnection.HTTP_MOVED_TEMP, TransferKind.END_OF_STREAM);
+    testResponseRedirectedWithPost(HTTP_MOVED_TEMP, TransferKind.END_OF_STREAM);
   }
 
   @Test public void response303SeeOtherWithPost() throws Exception {
@@ -2252,11 +2262,11 @@ public final class URLConnectionTest {
   }
 
   @Test public void postRedirectToGetWithChunkedRequest() throws Exception {
-    testResponseRedirectedWithPost(HttpURLConnection.HTTP_MOVED_TEMP, TransferKind.CHUNKED);
+    testResponseRedirectedWithPost(HTTP_MOVED_TEMP, TransferKind.CHUNKED);
   }
 
   @Test public void postRedirectToGetWithStreamedRequest() throws Exception {
-    testResponseRedirectedWithPost(HttpURLConnection.HTTP_MOVED_TEMP, TransferKind.FIXED_LENGTH);
+    testResponseRedirectedWithPost(HTTP_MOVED_TEMP, TransferKind.FIXED_LENGTH);
   }
 
   private void testResponseRedirectedWithPost(int redirectCode, TransferKind transferKind)
@@ -2285,7 +2295,7 @@ public final class URLConnectionTest {
 
   @Test public void redirectedPostStripsRequestBodyHeaders() throws Exception {
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: /page2"));
     server.enqueue(new MockResponse()
         .setBody("Page 2"));
@@ -2358,6 +2368,96 @@ public final class URLConnectionTest {
     testRedirect(false, "POST");
   }
 
+  /**
+   * In OkHttp 4.5 and earlier, HTTP 307 and 308 redirects were only honored if the request method
+   * was GET or HEAD.
+   *
+   * In OkHttp 4.6 and later, HTTP 307 and 308 redirects are honored for all request methods.
+   *
+   * If you're upgrading to OkHttp 4.6 and would like to retain the previous behavior, install this
+   * as a **network interceptor**. It will strip the `Location` header of impacted responses to
+   * prevent the redirect.
+   *
+   * <pre>{@code
+   *
+   *    OkHttpClient client = client.newBuilder()
+   *        .addNetworkInterceptor(new LegacyRedirectInterceptor())
+   *        .build();
+   *
+   * }</pre>
+   */
+  static class LegacyRedirectInterceptor implements Interceptor {
+    @Override public Response intercept(Chain chain) throws IOException {
+      Response response = chain.proceed(chain.request());
+
+      int code = response.code();
+      if (code != HTTP_TEMP_REDIRECT && code != HTTP_PERM_REDIRECT) return response;
+
+      String method = response.request().method();
+      if (method.equals("GET") || method.equals("HEAD")) return response;
+
+      String location = response.header("Location");
+      if (location == null) return response;
+
+      return response.newBuilder()
+          .removeHeader("Location")
+          .header("LegacyRedirectInterceptor-Location", location)
+          .build();
+    }
+  }
+
+  @Test public void response307WithPostReverted() throws Exception {
+    client = client.newBuilder()
+        .addNetworkInterceptor(new LegacyRedirectInterceptor())
+        .build();
+
+    MockResponse response1 = new MockResponse()
+        .setResponseCode(HTTP_TEMP_REDIRECT)
+        .setBody("This page has moved!")
+        .addHeader("Location: /page2");
+    server.enqueue(response1);
+
+    Request.Builder requestBuilder = new Request.Builder()
+        .url(server.url("/page1"));
+    requestBuilder.post(RequestBody.create("ABCD", null));
+
+    Response response = getResponse(requestBuilder.build());
+    String responseString = readAscii(response.body().byteStream(), Integer.MAX_VALUE);
+
+    RecordedRequest page1 = server.takeRequest();
+    assertThat(page1.getRequestLine()).isEqualTo(("POST /page1 HTTP/1.1"));
+
+    assertThat(page1.getBody().readUtf8()).isEqualTo("ABCD");
+    assertThat(server.getRequestCount()).isEqualTo(1);
+    assertThat(responseString).isEqualTo("This page has moved!");
+  }
+
+  @Test public void response308WithPostReverted() throws Exception {
+    client = client.newBuilder()
+        .addNetworkInterceptor(new LegacyRedirectInterceptor())
+        .build();
+
+    MockResponse response1 = new MockResponse()
+        .setResponseCode(HTTP_PERM_REDIRECT)
+        .setBody("This page has moved!")
+        .addHeader("Location: /page2");
+    server.enqueue(response1);
+
+    Request.Builder requestBuilder = new Request.Builder()
+        .url(server.url("/page1"));
+    requestBuilder.post(RequestBody.create("ABCD", null));
+
+    Response response = getResponse(requestBuilder.build());
+    String responseString = readAscii(response.body().byteStream(), Integer.MAX_VALUE);
+
+    RecordedRequest page1 = server.takeRequest();
+    assertThat(page1.getRequestLine()).isEqualTo(("POST /page1 HTTP/1.1"));
+
+    assertThat(page1.getBody().readUtf8()).isEqualTo("ABCD");
+    assertThat(server.getRequestCount()).isEqualTo(1);
+    assertThat(responseString).isEqualTo("This page has moved!");
+  }
+
   private void testRedirect(boolean temporary, String method) throws Exception {
     MockResponse response1 = new MockResponse()
         .setResponseCode(temporary ? HTTP_TEMP_REDIRECT : HTTP_PERM_REDIRECT)
@@ -2387,17 +2487,8 @@ public final class URLConnectionTest {
       assertThat(responseString).isEqualTo("Page 2");
     } else if (method.equals("HEAD")) {
       assertThat(responseString).isEqualTo("");
-    } else {
-      // Methods other than GET/HEAD shouldn't follow the redirect.
-      if (method.equals("POST")) {
-        assertThat(page1.getBody().readUtf8()).isEqualTo("ABCD");
-      }
-      assertThat(server.getRequestCount()).isEqualTo(1);
-      assertThat(responseString).isEqualTo("This page has moved!");
-      return;
     }
 
-    // GET/HEAD requests should have followed the redirect with the same method.
     assertThat(server.getRequestCount()).isEqualTo(2);
     RecordedRequest page2 = server.takeRequest();
     assertThat(page2.getRequestLine()).isEqualTo((method + " /page2 HTTP/1.1"));
@@ -2406,7 +2497,7 @@ public final class URLConnectionTest {
   @Test public void follow20Redirects() throws Exception {
     for (int i = 0; i < 20; i++) {
       server.enqueue(new MockResponse()
-          .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+          .setResponseCode(HTTP_MOVED_TEMP)
           .addHeader("Location: /" + (i + 1))
           .setBody("Redirecting to /" + (i + 1)));
     }
@@ -2421,7 +2512,7 @@ public final class URLConnectionTest {
   @Test public void doesNotFollow21Redirects() throws Exception {
     for (int i = 0; i < 21; i++) {
       server.enqueue(new MockResponse()
-          .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+          .setResponseCode(HTTP_MOVED_TEMP)
           .addHeader("Location: /" + (i + 1))
           .setBody("Redirecting to /" + (i + 1)));
     }
@@ -2565,7 +2656,7 @@ public final class URLConnectionTest {
             return socket;
           }
         })
-        .writeTimeout(500, TimeUnit.MILLISECONDS)
+        .writeTimeout(Duration.ofMillis(500))
         .build();
 
     server.start();
@@ -2644,7 +2735,7 @@ public final class URLConnectionTest {
 
   @Test public void connectionCloseWithRedirect() throws Exception {
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: /foo")
         .addHeader("Connection: close"));
     server.enqueue(new MockResponse()
@@ -2666,7 +2757,7 @@ public final class URLConnectionTest {
    */
   @Test public void sameConnectionRedirectAndReuse() throws Exception {
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .setSocketPolicy(SHUTDOWN_INPUT_AT_END)
         .addHeader("Location: /foo"));
     server.enqueue(new MockResponse()
@@ -3487,6 +3578,8 @@ public final class URLConnectionTest {
     try {
       client.newBuilder().sslSocketFactory(null);
       fail();
+    } catch (NullPointerException expected) {
+      // Kotlin 1.4
     } catch (IllegalArgumentException expected) {
     }
   }
@@ -3497,7 +3590,7 @@ public final class URLConnectionTest {
    */
   @Test public void gzipWithRedirectAndConnectionReuse() throws Exception {
     server.enqueue(new MockResponse()
-        .setResponseCode(HttpURLConnection.HTTP_MOVED_TEMP)
+        .setResponseCode(HTTP_MOVED_TEMP)
         .addHeader("Location: /foo")
         .addHeader("Content-Encoding: gzip")
         .setBody(gzip("Moved! Moved! Moved!")));
@@ -3539,7 +3632,7 @@ public final class URLConnectionTest {
     assertContent("abc", getResponse(newRequest("/")));
 
     RecordedRequest request = server.takeRequest();
-    assertThat(request.getHeader("User-Agent")).isEqualTo(Version.userAgent);
+    assertThat(request.getHeader("User-Agent")).isEqualTo(userAgent);
   }
 
   @Test public void urlWithSpaceInHost() {

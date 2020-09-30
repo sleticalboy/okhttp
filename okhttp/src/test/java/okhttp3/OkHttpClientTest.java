@@ -15,23 +15,44 @@
  */
 package okhttp3;
 
+import java.io.IOException;
 import java.net.CookieHandler;
 import java.net.CookieManager;
+import java.net.Proxy;
 import java.net.ProxySelector;
 import java.net.ResponseCache;
-import java.util.concurrent.TimeUnit;
+import java.net.SocketAddress;
+import java.net.URI;
+import java.security.KeyManagementException;
+import java.time.Duration;
+import java.util.AbstractList;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.X509TrustManager;
+import okhttp3.internal.platform.Platform;
+import okhttp3.internal.proxy.NullProxySelector;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.testing.PlatformRule;
 import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
 
 import static java.util.Arrays.asList;
+import static java.util.Collections.emptyList;
+import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.fail;
 
 public final class OkHttpClientTest {
+  @Rule public PlatformRule platform = new PlatformRule();
+
   @Rule public final MockWebServer server = new MockWebServer();
   @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
 
@@ -54,38 +75,43 @@ public final class OkHttpClientTest {
     assertThat(client.pingIntervalMillis()).isEqualTo(0);
   }
 
+  @Test public void webSocketDefaults() {
+    OkHttpClient client = clientTestRule.newClient();
+    assertThat(client.minWebSocketMessageToCompress()).isEqualTo(1024);
+  }
+
   @Test public void timeoutValidRange() {
     OkHttpClient.Builder builder = new OkHttpClient.Builder();
     try {
-      builder.callTimeout(1, TimeUnit.NANOSECONDS);
+      builder.callTimeout(Duration.ofNanos(1));
     } catch (IllegalArgumentException ignored) {
     }
     try {
-      builder.connectTimeout(1, TimeUnit.NANOSECONDS);
+      builder.connectTimeout(Duration.ofNanos(1));
     } catch (IllegalArgumentException ignored) {
     }
     try {
-      builder.writeTimeout(1, TimeUnit.NANOSECONDS);
+      builder.writeTimeout(Duration.ofNanos(1));
     } catch (IllegalArgumentException ignored) {
     }
     try {
-      builder.readTimeout(1, TimeUnit.NANOSECONDS);
+      builder.readTimeout(Duration.ofNanos(1));
     } catch (IllegalArgumentException ignored) {
     }
     try {
-      builder.callTimeout(365, TimeUnit.DAYS);
+      builder.callTimeout(Duration.ofDays(365));
     } catch (IllegalArgumentException ignored) {
     }
     try {
-      builder.connectTimeout(365, TimeUnit.DAYS);
+      builder.connectTimeout(Duration.ofDays(365));
     } catch (IllegalArgumentException ignored) {
     }
     try {
-      builder.writeTimeout(365, TimeUnit.DAYS);
+      builder.writeTimeout(Duration.ofDays(365));
     } catch (IllegalArgumentException ignored) {
     }
     try {
-      builder.readTimeout(365, TimeUnit.DAYS);
+      builder.readTimeout(Duration.ofDays(365));
     } catch (IllegalArgumentException ignored) {
     }
   }
@@ -113,12 +139,14 @@ public final class OkHttpClientTest {
     assertThat(a.dispatcher()).isNotNull();
     assertThat(a.connectionPool()).isNotNull();
     assertThat(a.sslSocketFactory()).isNotNull();
+    assertThat(a.x509TrustManager()).isNotNull();
 
     // Multiple clients share the instances.
     OkHttpClient b = client.newBuilder().build();
     assertThat(b.dispatcher()).isSameAs(a.dispatcher());
     assertThat(b.connectionPool()).isSameAs(a.connectionPool());
     assertThat(b.sslSocketFactory()).isSameAs(a.sslSocketFactory());
+    assertThat(b.x509TrustManager()).isSameAs(a.x509TrustManager());
   }
 
   @Test public void setProtocolsRejectsHttp10() throws Exception {
@@ -141,7 +169,7 @@ public final class OkHttpClientTest {
     try {
       builder.addInterceptor(null);
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
   }
 
@@ -150,7 +178,7 @@ public final class OkHttpClientTest {
     try {
       builder.addNetworkInterceptor(null);
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
   }
 
@@ -237,6 +265,135 @@ public final class OkHttpClientTest {
       client.sslSocketFactory();
       fail();
     } catch (IllegalStateException expected) {
+    }
+  }
+
+  @Test public void nullHostileProtocolList() {
+    List<Protocol> nullHostileProtocols = new AbstractList<Protocol>() {
+      @Override public boolean contains(Object o) {
+        if (o == null) throw new NullPointerException();
+        return super.contains(o);
+      }
+
+      @Override public int indexOf(Object o) {
+        if (o == null) throw new NullPointerException();
+        return super.indexOf(o);
+      }
+
+      @Override public Protocol get(int index) {
+        if (index != 0) throw new IndexOutOfBoundsException();
+        return Protocol.HTTP_1_1;
+      }
+
+      @Override public int size() {
+        return 1;
+      }
+    };
+
+    OkHttpClient client = new OkHttpClient.Builder()
+        .protocols(nullHostileProtocols)
+        .build();
+    assertEquals(asList(Protocol.HTTP_1_1), client.protocols());
+  }
+
+  @Test public void nullProtocolInList() {
+    List<Protocol> protocols = new ArrayList<>();
+    protocols.add(Protocol.HTTP_1_1);
+    protocols.add(null);
+    try {
+      new OkHttpClient.Builder().protocols(protocols);
+      fail();
+    } catch (IllegalArgumentException expected) {
+      assertThat(expected.getMessage()).isEqualTo("protocols must not contain null");
+    }
+  }
+
+  @Test public void spdy3IsRemovedFromProtocols() {
+    List<Protocol> protocols = new ArrayList<>();
+    protocols.add(Protocol.HTTP_1_1);
+    protocols.add(Protocol.SPDY_3);
+    OkHttpClient client = new OkHttpClient.Builder().protocols(protocols).build();
+    assertThat(client.protocols()).containsExactly(Protocol.HTTP_1_1);
+  }
+
+  @Test public void testProxyDefaults() {
+    OkHttpClient client = new OkHttpClient.Builder().build();
+    assertThat(client.proxy()).isNull();
+    assertThat(client.proxySelector()).isNotInstanceOf(NullProxySelector.class);
+
+    client = new OkHttpClient.Builder().proxy(Proxy.NO_PROXY).build();
+    assertThat(client.proxy()).isSameAs(Proxy.NO_PROXY);
+    assertThat(client.proxySelector()).isInstanceOf(NullProxySelector.class);
+
+    client = new OkHttpClient.Builder().proxySelector(new FakeProxySelector()).build();
+    assertThat(client.proxy()).isNull();
+    assertThat(client.proxySelector()).isInstanceOf(FakeProxySelector.class);
+  }
+
+  @Test
+  public void sharesRouteDatabase() throws KeyManagementException {
+    OkHttpClient client = new OkHttpClient.Builder().build();
+
+    ProxySelector proxySelector = new ProxySelector() {
+      @Override
+      public List<Proxy> select(URI uri) {
+        return emptyList();
+      }
+
+      @Override
+      public void connectFailed(URI uri, SocketAddress socketAddress, IOException e) {
+      }
+    };
+
+    X509TrustManager trustManager = Platform.get().platformTrustManager();
+    SSLContext sslContext = Platform.get().newSSLContext();
+    sslContext.init(null, null, null);
+
+    // new client, may share all same fields but likely different connection pool
+    assertNotSame(client.getRouteDatabase(), new OkHttpClient.Builder().build().getRouteDatabase());
+
+    // same client with no change affecting route db
+    assertSame(client.getRouteDatabase(), client.newBuilder().build().getRouteDatabase());
+    assertSame(client.getRouteDatabase(),
+        client.newBuilder().callTimeout(Duration.ofSeconds(5)).build().getRouteDatabase());
+
+    // logically different scope of client for route db
+    assertNotSame(client.getRouteDatabase(),
+        client.newBuilder().dns(hostname -> Collections.emptyList()).build().getRouteDatabase());
+    assertNotSame(client.getRouteDatabase(), client.newBuilder()
+        .proxyAuthenticator((route, response) -> null)
+        .build()
+        .getRouteDatabase());
+    assertNotSame(client.getRouteDatabase(),
+        client.newBuilder().protocols(singletonList(Protocol.HTTP_1_1)).build().getRouteDatabase());
+    assertNotSame(client.getRouteDatabase(), client.newBuilder()
+        .connectionSpecs(singletonList(ConnectionSpec.COMPATIBLE_TLS))
+        .build()
+        .getRouteDatabase());
+    assertNotSame(client.getRouteDatabase(),
+        client.newBuilder().proxySelector(proxySelector).build().getRouteDatabase());
+    assertNotSame(client.getRouteDatabase(),
+        client.newBuilder().proxy(Proxy.NO_PROXY).build().getRouteDatabase());
+    assertNotSame(client.getRouteDatabase(), client.newBuilder()
+        .sslSocketFactory(sslContext.getSocketFactory(), trustManager)
+        .build()
+        .getRouteDatabase());
+    assertNotSame(client.getRouteDatabase(),
+        client.newBuilder().hostnameVerifier((s, sslSession) -> false).build().getRouteDatabase());
+    assertNotSame(client.getRouteDatabase(), client.newBuilder()
+        .certificatePinner(new CertificatePinner.Builder().build())
+        .build()
+        .getRouteDatabase());
+  }
+
+  @Test public void minWebSocketMessageToCompressNegative() {
+    OkHttpClient.Builder builder = new OkHttpClient.Builder();
+    try {
+      builder.minWebSocketMessageToCompress(-1024);
+      fail();
+    } catch (IllegalArgumentException expected) {
+      assertThat(expected.getMessage())
+              .isEqualTo("minWebSocketMessageToCompress must be positive: -1024");
     }
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Square, Inc.
+ * Copyright (C) 2018 Square, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,18 +15,18 @@
  */
 package okhttp3
 
+import okhttp3.TestUtil.assumeNetwork
 import okhttp3.internal.platform.ConscryptPlatform
 import okhttp3.internal.platform.Platform
+import okhttp3.testing.PlatformRule
 import org.assertj.core.api.Assertions.assertThat
 import org.conscrypt.Conscrypt
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume
 import org.junit.Before
+import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
-import java.net.InetAddress
-import java.net.UnknownHostException
 
 class ConscryptTest {
   @Suppress("RedundantVisibilityModifier")
@@ -35,11 +35,10 @@ class ConscryptTest {
 
   @JvmField @Rule val clientTestRule = OkHttpClientTestRule()
 
-  private lateinit var client: OkHttpClient
+  private val client = clientTestRule.newClient()
 
   @Before fun setUp() {
     platform.assumeConscrypt()
-    client = clientTestRule.newClient()
   }
 
   @Test
@@ -47,15 +46,8 @@ class ConscryptTest {
     assertThat(Conscrypt.isConscrypt(Platform.get().platformTrustManager())).isTrue()
   }
 
-  private fun assumeNetwork() {
-    try {
-      InetAddress.getByName("www.google.com")
-    } catch (uhe: UnknownHostException) {
-      Assume.assumeNoException(uhe)
-    }
-  }
-
   @Test
+  @Ignore
   fun testMozilla() {
     assumeNetwork()
 
@@ -68,6 +60,7 @@ class ConscryptTest {
   }
 
   @Test
+  @Ignore
   fun testGoogle() {
     assumeNetwork()
 
@@ -90,12 +83,14 @@ class ConscryptTest {
 
   @Test
   fun testVersion() {
+    val version = Conscrypt.version()
+
     assertTrue(ConscryptPlatform.atLeastVersion(1, 4, 9))
-    assertTrue(ConscryptPlatform.atLeastVersion(2))
-    assertTrue(ConscryptPlatform.atLeastVersion(2, 1))
-    assertTrue(ConscryptPlatform.atLeastVersion(2, 1, 0))
-    assertFalse(ConscryptPlatform.atLeastVersion(2, 1, 1))
-    assertFalse(ConscryptPlatform.atLeastVersion(2, 2))
-    assertFalse(ConscryptPlatform.atLeastVersion(9))
+    assertTrue(ConscryptPlatform.atLeastVersion(version.major()))
+    assertTrue(ConscryptPlatform.atLeastVersion(version.major(), version.minor()))
+    assertTrue(ConscryptPlatform.atLeastVersion(version.major(), version.minor(), version.patch()))
+    assertFalse(ConscryptPlatform.atLeastVersion(version.major(), version.minor(), version.patch() + 1))
+    assertFalse(ConscryptPlatform.atLeastVersion(version.major(), version.minor() + 1))
+    assertFalse(ConscryptPlatform.atLeastVersion(version.major() + 1))
   }
 }

@@ -37,8 +37,11 @@ import okhttp3.Headers;
 import okhttp3.HttpUrl;
 import okhttp3.Protocol;
 import okhttp3.RecordingHostnameVerifier;
+import okhttp3.TestUtil;
+import okhttp3.testing.PlatformRule;
 import okhttp3.tls.HandshakeCertificates;
 import okhttp3.tls.HeldCertificate;
+import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
@@ -57,10 +60,17 @@ import static org.assertj.core.data.Offset.offset;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeFalse;
 
+@SuppressWarnings({"ArraysAsListWithZeroOrOneArgument", "deprecation"})
 public final class MockWebServerTest {
+  @Rule public PlatformRule platform = new PlatformRule();
+
   @Rule public final MockWebServer server = new MockWebServer();
 
   @Rule public Timeout globalTimeout = Timeout.seconds(30);
+
+  @Before public void checkPlatforms() {
+    platform.assumeNotBouncyCastle();
+  }
 
   @Test public void defaultMockResponse() {
     MockResponse response = new MockResponse();
@@ -134,7 +144,7 @@ public final class MockWebServerTest {
     HttpURLConnection connection = (HttpURLConnection) url.openConnection();
     connection.setRequestProperty("Accept-Language", "en-US");
     InputStream in = connection.getInputStream();
-    BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+    BufferedReader reader = new BufferedReader(new InputStreamReader(in, UTF_8));
     assertThat(connection.getResponseCode()).isEqualTo(HttpURLConnection.HTTP_OK);
     assertThat(reader.readLine()).isEqualTo("hello world");
 
@@ -155,7 +165,7 @@ public final class MockWebServerTest {
 
     URLConnection connection = server.url("/").url().openConnection();
     InputStream in = connection.getInputStream();
-    BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+    BufferedReader reader = new BufferedReader(new InputStreamReader(in, UTF_8));
     assertThat(reader.readLine()).isEqualTo("This is the new location!");
 
     RecordedRequest first = server.takeRequest();
@@ -179,7 +189,7 @@ public final class MockWebServerTest {
 
     URLConnection connection = server.url("/").url().openConnection();
     InputStream in = connection.getInputStream();
-    BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+    BufferedReader reader = new BufferedReader(new InputStreamReader(in, UTF_8));
     assertThat(reader.readLine()).isEqualTo("enqueued in the background");
   }
 
@@ -246,6 +256,8 @@ public final class MockWebServerTest {
    * should yield one sleep for a total delay of 500ms.
    */
   @Test public void throttleRequest() throws Exception {
+    TestUtil.assumeNotWindows();
+
     server.enqueue(new MockResponse()
         .throttleBody(3, 500, TimeUnit.MILLISECONDS));
 
@@ -265,6 +277,8 @@ public final class MockWebServerTest {
    * should yield one sleep for a total delay of 500ms.
    */
   @Test public void throttleResponse() throws Exception {
+    TestUtil.assumeNotWindows();
+
     server.enqueue(new MockResponse()
         .setBody("ABCDEF")
         .throttleBody(3, 500, TimeUnit.MILLISECONDS));
@@ -286,6 +300,8 @@ public final class MockWebServerTest {
 
   /** Delay the response body by sleeping 1s. */
   @Test public void delayResponse() throws IOException {
+    TestUtil.assumeNotWindows();
+
     server.enqueue(new MockResponse()
         .setBody("ABCDEF")
         .setBodyDelay(1, SECONDS));
@@ -377,15 +393,15 @@ public final class MockWebServerTest {
     server.shutdown();
   }
 
-  @Test public void portImplicitlyStarts() throws IOException {
+  @Test public void portImplicitlyStarts() {
     assertThat(server.getPort()).isGreaterThan(0);
   }
 
-  @Test public void hostnameImplicitlyStarts() throws IOException {
+  @Test public void hostnameImplicitlyStarts() {
     assertThat(server.getHostName()).isNotNull();
   }
 
-  @Test public void toProxyAddressImplicitlyStarts() throws IOException {
+  @Test public void toProxyAddressImplicitlyStarts() {
     assertThat(server.toProxyAddress()).isNotNull();
   }
 
@@ -434,7 +450,7 @@ public final class MockWebServerTest {
     URL url = server.url("/a/deep/path?key=foo%20bar").url();
     HttpURLConnection connection = (HttpURLConnection) url.openConnection();
     InputStream in = connection.getInputStream();
-    BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+    BufferedReader reader = new BufferedReader(new InputStreamReader(in, UTF_8));
     assertThat(connection.getResponseCode()).isEqualTo(HttpURLConnection.HTTP_OK);
     assertThat(reader.readLine()).isEqualTo("hello world");
 
@@ -478,7 +494,7 @@ public final class MockWebServerTest {
     connection.getOutputStream().write("request".getBytes(UTF_8));
 
     InputStream in = connection.getInputStream();
-    BufferedReader reader = new BufferedReader(new InputStreamReader(in));
+    BufferedReader reader = new BufferedReader(new InputStreamReader(in, UTF_8));
     assertThat(reader.readLine()).isEqualTo("response");
 
     RecordedRequest request = server.takeRequest();
@@ -526,7 +542,8 @@ public final class MockWebServerTest {
     connection.setHostnameVerifier(new RecordingHostnameVerifier());
 
     assertThat(connection.getResponseCode()).isEqualTo(HttpURLConnection.HTTP_OK);
-    BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+    BufferedReader reader =
+        new BufferedReader(new InputStreamReader(connection.getInputStream(), UTF_8));
     assertThat(reader.readLine()).isEqualTo("abc");
 
     RecordedRequest request = server.takeRequest();
@@ -576,7 +593,8 @@ public final class MockWebServerTest {
     connection.setHostnameVerifier(new RecordingHostnameVerifier());
 
     assertThat(connection.getResponseCode()).isEqualTo(HttpURLConnection.HTTP_OK);
-    BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+    BufferedReader reader =
+        new BufferedReader(new InputStreamReader(connection.getInputStream(), UTF_8));
     assertThat(reader.readLine()).isEqualTo("abc");
 
     RecordedRequest request = server.takeRequest();
@@ -588,6 +606,21 @@ public final class MockWebServerTest {
     assertThat(handshake.localCertificates().size()).isEqualTo(1);
     assertThat(handshake.peerPrincipal()).isNotNull();
     assertThat(handshake.peerCertificates().size()).isEqualTo(1);
+  }
+
+  @Test
+  public void shutdownTwice() throws IOException {
+    MockWebServer server2 = new MockWebServer();
+
+    server2.start();
+    server2.shutdown();
+    try {
+      server2.start();
+      fail();
+    } catch (IllegalArgumentException iae) {
+      // expected
+    }
+    server2.shutdown();
   }
 
   public static String getPlatform() {

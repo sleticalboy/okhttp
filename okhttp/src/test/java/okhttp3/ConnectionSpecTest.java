@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
+import okhttp3.testing.PlatformRule;
 import org.junit.Rule;
 import org.junit.Test;
 
@@ -82,6 +83,7 @@ public final class ConnectionSpecTest {
 
   @Test public void tls_defaultCiphers_noFallbackIndicator() throws Exception {
     platform.assumeNotConscrypt();
+    platform.assumeNotBouncyCastle();
 
     ConnectionSpec tlsSpec = new ConnectionSpec.Builder(true)
         .tlsVersions(TlsVersion.TLS_1_2)
@@ -110,6 +112,7 @@ public final class ConnectionSpecTest {
 
   @Test public void tls_defaultCiphers_withFallbackIndicator() throws Exception {
     platform.assumeNotConscrypt();
+    platform.assumeNotBouncyCastle();
 
     ConnectionSpec tlsSpec = new ConnectionSpec.Builder(true)
         .tlsVersions(TlsVersion.TLS_1_2)
@@ -142,6 +145,7 @@ public final class ConnectionSpecTest {
 
   @Test public void tls_explicitCiphers() throws Exception {
     platform.assumeNotConscrypt();
+    platform.assumeNotBouncyCastle();
 
     ConnectionSpec tlsSpec = new ConnectionSpec.Builder(true)
         .cipherSuites(CipherSuite.TLS_RSA_WITH_RC4_128_MD5)
@@ -175,7 +179,7 @@ public final class ConnectionSpecTest {
   @Test public void tls_stringCiphersAndVersions() throws Exception {
     // Supporting arbitrary input strings allows users to enable suites and versions that are not
     // yet known to the library, but are supported by the platform.
-    ConnectionSpec tlsSpec = new ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
+    new ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
         .cipherSuites("MAGIC-CIPHER")
         .tlsVersions("TLS9k")
         .build();
@@ -183,6 +187,7 @@ public final class ConnectionSpecTest {
 
   @Test public void tls_missingRequiredCipher() throws Exception {
     platform.assumeNotConscrypt();
+    platform.assumeNotBouncyCastle();
 
     ConnectionSpec tlsSpec = new ConnectionSpec.Builder(true)
         .cipherSuites(CipherSuite.TLS_RSA_WITH_RC4_128_MD5)
@@ -210,6 +215,7 @@ public final class ConnectionSpecTest {
 
   @Test public void allEnabledCipherSuites() throws Exception {
     platform.assumeNotConscrypt();
+    platform.assumeNotBouncyCastle();
 
     ConnectionSpec tlsSpec = new ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
         .allEnabledCipherSuites()
@@ -249,6 +255,7 @@ public final class ConnectionSpecTest {
 
   @Test public void tls_missingTlsVersion() throws Exception {
     platform.assumeNotConscrypt();
+    platform.assumeNotBouncyCastle();
 
     ConnectionSpec tlsSpec = new ConnectionSpec.Builder(true)
         .cipherSuites(CipherSuite.TLS_RSA_WITH_RC4_128_MD5)
@@ -283,6 +290,8 @@ public final class ConnectionSpecTest {
     assertThat(set.add(ConnectionSpec.CLEARTEXT)).isTrue();
     assertThat(set.add(allTlsVersions)).isTrue();
     assertThat(set.add(allCipherSuites)).isTrue();
+    allCipherSuites.hashCode();
+    assertThat(allCipherSuites.equals(null)).isFalse();
 
     assertThat(set.remove(ConnectionSpec.MODERN_TLS)).isTrue();
     assertThat(set.remove(ConnectionSpec.COMPATIBLE_TLS)).isTrue();
@@ -290,6 +299,8 @@ public final class ConnectionSpecTest {
     assertThat(set.remove(allTlsVersions)).isTrue();
     assertThat(set.remove(allCipherSuites)).isTrue();
     assertThat(set).isEmpty();
+    allTlsVersions.hashCode();
+    assertThat(allTlsVersions.equals(null)).isFalse();
   }
 
   @Test public void allEnabledToString() throws Exception {

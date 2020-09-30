@@ -21,11 +21,11 @@ import java.io.InterruptedIOException;
 import java.net.HttpURLConnection;
 import java.net.ProtocolException;
 import java.net.SocketTimeoutException;
+import java.time.Duration;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Logger;
 import okhttp3.OkHttpClient;
 import okhttp3.OkHttpClientTestRule;
 import okhttp3.Protocol;
@@ -34,13 +34,17 @@ import okhttp3.RecordingHostnameVerifier;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.TestLogHandler;
+import okhttp3.TestUtil;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
+import okhttp3.internal.concurrent.TaskRunner;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import okhttp3.mockwebserver.SocketPolicy;
+import okhttp3.testing.Flaky;
+import okhttp3.testing.PlatformRule;
 import okhttp3.tls.HandshakeCertificates;
 import okio.Buffer;
 import okio.ByteString;
@@ -49,6 +53,7 @@ import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 
 import static java.util.Arrays.asList;
 import static okhttp3.TestUtil.repeat;
@@ -57,34 +62,46 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.data.Offset.offset;
 import static org.junit.Assert.fail;
 
+@Flaky
 public final class WebSocketHttpTest {
-  @Rule public final MockWebServer webServer = new MockWebServer();
-  @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
+  // Flaky https://github.com/square/okhttp/issues/4515
+  // Flaky https://github.com/square/okhttp/issues/4953
+
+  final MockWebServer webServer = new MockWebServer();
+  final OkHttpClientTestRule clientTestRule = configureClientTestRule();
+
+  @Rule public final RuleChain orderedRules = RuleChain.outerRule(clientTestRule).around(webServer);
+  @Rule public final PlatformRule platform = new PlatformRule();
+  @Rule public final TestLogHandler testLogHandler = new TestLogHandler(OkHttpClient.class);
 
   private final HandshakeCertificates handshakeCertificates = localhost();
   private final WebSocketRecorder clientListener = new WebSocketRecorder("client");
   private final WebSocketRecorder serverListener = new WebSocketRecorder("server");
   private final Random random = new Random(0);
-  private OkHttpClient client;
+  private OkHttpClient client = clientTestRule.newClientBuilder()
+      .writeTimeout(Duration.ofMillis(500))
+      .readTimeout(Duration.ofMillis(500))
+      .addInterceptor(chain -> {
+        Response response = chain.proceed(chain.request());
+        // Ensure application interceptors never see a null body.
+        assertThat(response.body()).isNotNull();
+        return response;
+      })
+      .build();
 
-  @Before public void setUp() {
-    client = clientTestRule.newClientBuilder()
-        .writeTimeout(500, TimeUnit.MILLISECONDS)
-        .readTimeout(500, TimeUnit.MILLISECONDS)
-        .addInterceptor(chain -> {
-          Response response = chain.proceed(chain.request());
-          // Ensure application interceptors never see a null body.
-          assertThat(response.body()).isNotNull();
-          return response;
-        })
-        .build();
+  private OkHttpClientTestRule configureClientTestRule() {
+    OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
+    clientTestRule.setRecordTaskRunner(true);
+    return clientTestRule;
   }
 
-  @After public void tearDown() {
-    clientListener.assertExhausted();
+  @Before public void setUp() {
+    platform.assumeNotOpenJSSE();
+    platform.assumeNotBouncyCastle();
+  }
 
-    // TODO: assert all connections are released once leaks are fixed
-    clientTestRule.abandonClient();
+  @After public void tearDown() throws InterruptedException {
+    clientListener.assertExhausted();
   }
 
   @Test public void textMessage() {
@@ -122,13 +139,15 @@ public final class WebSocketHttpTest {
     try {
       webSocket.send((String) null);
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
 
     closeWebSockets(webSocket, server);
   }
 
   @Test public void nullByteStringThrows() {
+    TestUtil.assumeNotWindows();
+
     webServer.enqueue(new MockResponse().withWebSocketUpgrade(serverListener));
     WebSocket webSocket = newWebSocket();
 
@@ -137,7 +156,7 @@ public final class WebSocketHttpTest {
     try {
       webSocket.send((ByteString) null);
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
 
     closeWebSockets(webSocket, server);
@@ -175,13 +194,9 @@ public final class WebSocketHttpTest {
 
   @Ignore("AsyncCall currently lets runtime exceptions propagate.")
   @Test public void throwingOnFailLogs() throws Exception {
-    TestLogHandler logs = new TestLogHandler();
-    Logger logger = Logger.getLogger(OkHttpClient.class.getName());
-    logger.addHandler(logs);
-
     webServer.enqueue(new MockResponse().setResponseCode(200).setBody("Body"));
 
-    final RuntimeException e = new RuntimeException();
+    final RuntimeException e = new RuntimeException("boom");
     clientListener.setNextEventDelegate(new WebSocketListener() {
       @Override public void onFailure(WebSocket webSocket, Throwable t, Response response) {
         throw e;
@@ -190,8 +205,7 @@ public final class WebSocketHttpTest {
 
     newWebSocket();
 
-    assertThat(logs.take()).isEqualTo("");
-    logger.removeHandler(logs);
+    assertThat(testLogHandler.take()).isEqualTo("INFO: [WS client] onFailure");
   }
 
   @Test public void throwingOnMessageClosesImmediatelyAndFails() {
@@ -249,8 +263,8 @@ public final class WebSocketHttpTest {
     server.close(1001, "bye");
     clientListener.assertClosed(1001, "bye");
     clientListener.assertExhausted();
-    serverListener.assertClosing(1000,  "");
-    serverListener.assertClosed(1000,  "");
+    serverListener.assertClosing(1000, "");
+    serverListener.assertClosed(1000, "");
     serverListener.assertExhausted();
   }
 
@@ -364,6 +378,16 @@ public final class WebSocketHttpTest {
 
     clientListener.assertFailure(101, null, ProtocolException.class,
         "Expected 'Sec-WebSocket-Accept' header value 'ujmZX4KXZqjwy6vi1aQFH5p4Ygk=' but was 'magic'");
+  }
+
+  @Test public void clientIncludesForbiddenHeader() throws IOException {
+    newWebSocket(new Request.Builder()
+        .url(webServer.url("/"))
+        .header("Sec-WebSocket-Extensions", "permessage-deflate")
+        .build());
+
+    clientListener.assertFailure(ProtocolException.class,
+        "Request header not permitted: 'Sec-WebSocket-Extensions'");
   }
 
   @Test public void webSocketAndApplicationInterceptors() {
@@ -485,6 +509,8 @@ public final class WebSocketHttpTest {
   }
 
   @Test public void wsScheme() {
+    TestUtil.assumeNotWindows();
+
     websocketScheme("ws");
   }
 
@@ -564,7 +590,7 @@ public final class WebSocketHttpTest {
 
   @Test public void clientPingsServerOnInterval() throws Exception {
     client = client.newBuilder()
-        .pingInterval(500, TimeUnit.MILLISECONDS)
+        .pingInterval(Duration.ofMillis(500))
         .build();
 
     webServer.enqueue(new MockResponse().withWebSocketUpgrade(serverListener));
@@ -579,8 +605,8 @@ public final class WebSocketHttpTest {
     }
 
     long elapsedUntilPong3 = System.nanoTime() - startNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPong3)).isCloseTo((double) 1500, offset(
-        250d));
+    assertThat(TimeUnit.NANOSECONDS.toMillis(elapsedUntilPong3))
+        .isCloseTo(1500L, offset(250L));
 
     // The client pinged the server 3 times, and it has ponged back 3 times.
     assertThat(webSocket.sentPingCount()).isEqualTo(3);
@@ -620,8 +646,10 @@ public final class WebSocketHttpTest {
    * 1000 ms.
    */
   @Test public void unacknowledgedPingFailsConnection() {
+    TestUtil.assumeNotWindows();
+
     client = client.newBuilder()
-        .pingInterval(500, TimeUnit.MILLISECONDS)
+        .pingInterval(Duration.ofMillis(500))
         .build();
 
     // Stall in onOpen to prevent pongs from being sent.
@@ -644,8 +672,8 @@ public final class WebSocketHttpTest {
     latch.countDown();
 
     long elapsedUntilFailure = System.nanoTime() - openAtNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilFailure)).isCloseTo((double) 1000, offset(
-        250d));
+    assertThat(TimeUnit.NANOSECONDS.toMillis(elapsedUntilFailure))
+        .isCloseTo(1000L, offset(250L));
   }
 
   /** https://github.com/square/okhttp/issues/2788 */
@@ -664,8 +692,8 @@ public final class WebSocketHttpTest {
     // Confirm that the hard cancel occurred after 500 ms.
     clientListener.assertFailure();
     long elapsedUntilFailure = System.nanoTime() - closeAtNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilFailure)).isCloseTo((double) 500, offset(
-        250d));
+    assertThat(TimeUnit.NANOSECONDS.toMillis(elapsedUntilFailure))
+        .isCloseTo(500L, offset(250L));
 
     // Close the server and confirm it saw what we expected.
     server.close(1000, null);
@@ -676,7 +704,7 @@ public final class WebSocketHttpTest {
     RecordingEventListener listener = new RecordingEventListener();
 
     client = client.newBuilder()
-        .eventListener(listener)
+        .eventListenerFactory(clientTestRule.wrap(listener))
         .build();
 
     webServer.enqueue(new MockResponse().withWebSocketUpgrade(serverListener));
@@ -704,9 +732,9 @@ public final class WebSocketHttpTest {
         .setHeadersDelay(500, TimeUnit.MILLISECONDS));
 
     client = client.newBuilder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .writeTimeout(0, TimeUnit.MILLISECONDS)
-        .callTimeout(100, TimeUnit.MILLISECONDS)
+        .readTimeout(Duration.ZERO)
+        .writeTimeout(Duration.ZERO)
+        .callTimeout(Duration.ofMillis(100))
         .build();
 
     newWebSocket();
@@ -715,7 +743,7 @@ public final class WebSocketHttpTest {
 
   @Test public void callTimeoutDoesNotApplyOnceConnected() throws Exception {
     client = client.newBuilder()
-        .callTimeout(100, TimeUnit.MILLISECONDS)
+        .callTimeout(Duration.ofMillis(100))
         .build();
 
     webServer.enqueue(new MockResponse()
@@ -762,6 +790,113 @@ public final class WebSocketHttpTest {
     assertThat(webServer.takeRequest().getSequenceNumber()).isEqualTo(1);
   }
 
+  /** https://github.com/square/okhttp/issues/5705 */
+  @Test public void closeWithoutSuccessfulConnect() {
+    Request request = new Request.Builder()
+        .url(webServer.url("/"))
+        .build();
+    WebSocket webSocket = client.newWebSocket(request, clientListener);
+    webSocket.send("hello");
+    webSocket.close(1000, null);
+  }
+
+  @Test public void compressedMessages() throws Exception {
+    successfulExtensions("permessage-deflate");
+  }
+
+  @Test public void compressedMessagesNoClientContextTakeover() throws Exception {
+    successfulExtensions("permessage-deflate; client_no_context_takeover");
+  }
+
+  @Test public void compressedMessagesNoServerContextTakeover() throws Exception {
+    successfulExtensions("permessage-deflate; server_no_context_takeover");
+  }
+
+  @Test public void unexpectedExtensionParameter() throws Exception {
+    extensionNegotiationFailure("permessage-deflate; unknown_parameter=15");
+  }
+
+  @Test public void clientMaxWindowBitsIncluded() throws Exception {
+    extensionNegotiationFailure("permessage-deflate; client_max_window_bits=15");
+  }
+
+  @Test public void serverMaxWindowBitsTooLow() throws Exception {
+    extensionNegotiationFailure("permessage-deflate; server_max_window_bits=7");
+  }
+
+  @Test public void serverMaxWindowBitsTooHigh() throws Exception {
+    extensionNegotiationFailure("permessage-deflate; server_max_window_bits=16");
+  }
+
+  @Test public void serverMaxWindowBitsJustRight() throws Exception {
+    successfulExtensions("permessage-deflate; server_max_window_bits=15");
+  }
+
+  private void successfulExtensions(String extensionsHeader) throws Exception {
+    webServer.enqueue(new MockResponse()
+        .addHeader("Sec-WebSocket-Extensions", extensionsHeader)
+        .withWebSocketUpgrade(serverListener));
+
+    WebSocket client = newWebSocket();
+    clientListener.assertOpen();
+    WebSocket server = serverListener.assertOpen();
+
+    // Server to client message big enough to be compressed.
+    String message1 = TestUtil.repeat('a', (int) RealWebSocket.DEFAULT_MINIMUM_DEFLATE_SIZE);
+    server.send(message1);
+    clientListener.assertTextMessage(message1);
+
+    // Client to server message big enough to be compressed.
+    String message2 = TestUtil.repeat('b', (int) RealWebSocket.DEFAULT_MINIMUM_DEFLATE_SIZE);
+    client.send(message2);
+    serverListener.assertTextMessage(message2);
+
+    // Empty server to client message.
+    String message3 = "";
+    server.send(message3);
+    clientListener.assertTextMessage(message3);
+
+    // Empty client to server message.
+    String message4 = "";
+    client.send(message4);
+    serverListener.assertTextMessage(message4);
+
+    // Server to client message that shares context with message1.
+    String message5 = message1 + message1;
+    server.send(message5);
+    clientListener.assertTextMessage(message5);
+
+    // Client to server message that shares context with message2.
+    String message6 = message2 + message2;
+    client.send(message6);
+    serverListener.assertTextMessage(message6);
+
+    closeWebSockets(client, server);
+
+    RecordedRequest upgradeRequest = webServer.takeRequest();
+    assertThat(upgradeRequest.getHeader("Sec-WebSocket-Extensions"))
+        .isEqualTo("permessage-deflate");
+  }
+
+  private void extensionNegotiationFailure(String extensionsHeader) throws Exception {
+    webServer.enqueue(new MockResponse()
+        .addHeader("Sec-WebSocket-Extensions", extensionsHeader)
+        .withWebSocketUpgrade(serverListener));
+
+    newWebSocket();
+    clientListener.assertOpen();
+    WebSocket server = serverListener.assertOpen();
+
+    String clientReason = "unexpected Sec-WebSocket-Extensions in response header";
+    serverListener.assertClosing(1010, clientReason);
+    server.close(1010, "");
+    clientListener.assertClosing(1010, "");
+    clientListener.assertClosed(1010, "");
+    serverListener.assertClosed(1010, clientReason);
+    clientListener.assertExhausted();
+    serverListener.assertExhausted();
+  }
+
   private MockResponse upgradeResponse(RecordedRequest request) {
     String key = request.getHeader("Sec-WebSocket-Key");
     return new MockResponse()
@@ -793,8 +928,8 @@ public final class WebSocketHttpTest {
   }
 
   private RealWebSocket newWebSocket(Request request) {
-    RealWebSocket webSocket = new RealWebSocket(
-        request, clientListener, random, client.pingIntervalMillis());
+    RealWebSocket webSocket = new RealWebSocket(TaskRunner.INSTANCE, request, clientListener,
+        random, client.pingIntervalMillis(), null, 0L);
     webSocket.connect(client);
     return webSocket;
   }

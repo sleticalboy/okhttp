@@ -15,10 +15,13 @@
  */
 package okhttp3.internal.tls;
 
+import java.io.IOException;
 import java.net.SocketException;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.util.Collections;
+import java.util.List;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLException;
@@ -30,13 +33,17 @@ import javax.net.ssl.X509KeyManager;
 import javax.net.ssl.X509TrustManager;
 import javax.security.auth.x500.X500Principal;
 import okhttp3.Call;
+import okhttp3.CallEvent;
 import okhttp3.OkHttpClient;
 import okhttp3.OkHttpClientTestRule;
-import okhttp3.PlatformRule;
+import okhttp3.RecordingEventListener;
 import okhttp3.Request;
 import okhttp3.Response;
+import okhttp3.internal.http2.ConnectionShutdownException;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.testing.PlatformRule;
+import okhttp3.testing.PlatformVersion;
 import okhttp3.tls.HandshakeCertificates;
 import okhttp3.tls.HeldCertificate;
 import org.junit.Before;
@@ -44,13 +51,12 @@ import org.junit.Rule;
 import org.junit.Test;
 
 import static java.util.Arrays.asList;
-import static okhttp3.PlatformRule.getPlatformSystemProperty;
-import static okhttp3.internal.platform.PlatformTest.getJvmSpecVersion;
+import static okhttp3.testing.PlatformRule.getPlatformSystemProperty;
 import static okhttp3.tls.internal.TlsUtil.newKeyManager;
 import static okhttp3.tls.internal.TlsUtil.newTrustManager;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
-import static org.junit.Assume.assumeFalse;
 
 public final class ClientAuthTest {
   @Rule public final PlatformRule platform = new PlatformRule();
@@ -66,6 +72,9 @@ public final class ClientAuthTest {
 
   @Before
   public void setUp() {
+    platform.assumeNotOpenJSSE();
+    platform.assumeNotBouncyCastle();
+
     serverRootCa = new HeldCertificate.Builder()
         .serialNumber(1L)
         .certificateAuthority(1)
@@ -180,9 +189,8 @@ public final class ClientAuthTest {
   }
 
   @Test public void missingClientAuthFailsForNeeds() throws Exception {
-    // TODO https://github.com/square/okhttp/issues/4598
+    // Fails with 11.0.1 https://github.com/square/okhttp/issues/4598
     // StreamReset stream was reset: PROT...
-    assumeFalse(getJvmSpecVersion().equals("11"));
 
     OkHttpClient client = buildClient(null, clientIntermediateCa.certificate());
 
@@ -198,10 +206,10 @@ public final class ClientAuthTest {
       fail();
     } catch (SSLHandshakeException expected) {
     } catch (SSLException expected) {
-      String jvmVersion = System.getProperty("java.specification.version");
-      assertThat(jvmVersion).matches("1[123]");
+      assertThat(PlatformVersion.INSTANCE.getMajorVersion()).isGreaterThanOrEqualTo(11);
     } catch (SocketException expected) {
-      assertThat(getPlatformSystemProperty()).isEqualTo("jdk9");
+      assertThat(getPlatformSystemProperty()).isIn(PlatformRule.JDK9_PROPERTY,
+          PlatformRule.CONSCRYPT_PROPERTY);
     }
   }
 
@@ -230,9 +238,8 @@ public final class ClientAuthTest {
   }
 
   @Test public void invalidClientAuthFails() throws Throwable {
-    // TODO https://github.com/square/okhttp/issues/4598
+    // Fails with https://github.com/square/okhttp/issues/4598
     // StreamReset stream was reset: PROT...
-    assumeFalse(getJvmSpecVersion().matches("1[123]"));
 
     HeldCertificate clientCert2 = new HeldCertificate.Builder()
         .serialNumber(4L)
@@ -254,11 +261,63 @@ public final class ClientAuthTest {
     } catch (SSLHandshakeException expected) {
     } catch (SSLException expected) {
       // javax.net.ssl.SSLException: readRecord
-      String jvmVersion = System.getProperty("java.specification.version");
-      assertThat(jvmVersion).matches("1[123]");
+      assertThat(PlatformVersion.INSTANCE.getMajorVersion()).isGreaterThanOrEqualTo(11);
     } catch (SocketException expected) {
-      assertThat(getPlatformSystemProperty()).isEqualTo("jdk9");
+      assertThat(getPlatformSystemProperty()).isIn(PlatformRule.JDK9_PROPERTY,
+          PlatformRule.CONSCRYPT_PROPERTY);
+    } catch (ConnectionShutdownException expected) {
+      // It didn't fail until it reached the application layer.
     }
+  }
+
+  @Test public void invalidClientAuthEvents() throws Throwable {
+    server.enqueue(new MockResponse().setBody("abc"));
+
+    clientCert = new HeldCertificate.Builder()
+        .signedBy(clientIntermediateCa)
+        .serialNumber(4L)
+        .commonName("Jethro Willis")
+        .addSubjectAlternativeName("jethrowillis.com")
+        .validityInterval(1, 2)
+        .build();
+
+    OkHttpClient client = buildClient(clientCert, clientIntermediateCa.certificate());
+
+    RecordingEventListener listener = new RecordingEventListener();
+
+    client = client.newBuilder()
+        .eventListener(listener)
+        .build();
+
+    SSLSocketFactory socketFactory = buildServerSslSocketFactory();
+
+    server.useHttps(socketFactory, false);
+    server.requireClientAuth();
+
+    Call call = client.newCall(new Request.Builder().url(server.url("/")).build());
+
+    try {
+      call.execute();
+      fail();
+    } catch (IOException expected) {
+    }
+
+    // Observed Events are variable
+    // JDK 14
+    // CallStart, ProxySelectStart, ProxySelectEnd, DnsStart, DnsEnd, ConnectStart, SecureConnectStart,
+    // SecureConnectEnd, ConnectEnd, ConnectionAcquired, RequestHeadersStart, RequestHeadersEnd,
+    // ResponseFailed, ConnectionReleased, CallFailed
+    // JDK 8
+    // CallStart, ProxySelectStart, ProxySelectEnd, DnsStart, DnsEnd, ConnectStart, SecureConnectStart,
+    // ConnectFailed, CallFailed
+    // Gradle - JDK 11
+    // CallStart, ProxySelectStart, ProxySelectEnd, DnsStart, DnsEnd, ConnectStart, SecureConnectStart,
+    // SecureConnectEnd, ConnectFailed, CallFailed
+
+    List<String> recordedEventTypes = listener.recordedEventTypes();
+    assertThat(recordedEventTypes).startsWith(
+        "CallStart", "ProxySelectStart", "ProxySelectEnd", "DnsStart", "DnsEnd", "ConnectStart", "SecureConnectStart");
+    assertThat(recordedEventTypes).endsWith("CallFailed");
   }
 
   private OkHttpClient buildClient(
@@ -283,8 +342,8 @@ public final class ClientAuthTest {
     try {
       X509KeyManager keyManager = newKeyManager(
           null, serverCert, serverIntermediateCa.certificate());
-      X509TrustManager trustManager = newTrustManager(
-          null, asList(serverRootCa.certificate(), clientRootCa.certificate()));
+      X509TrustManager trustManager = newTrustManager(null,
+          asList(serverRootCa.certificate(), clientRootCa.certificate()), Collections.emptyList());
       SSLContext sslContext = SSLContext.getInstance("TLS");
       sslContext.init(new KeyManager[] {keyManager}, new TrustManager[] {trustManager},
           new SecureRandom());

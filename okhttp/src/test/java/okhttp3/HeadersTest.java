@@ -15,14 +15,12 @@
  */
 package okhttp3;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import kotlin.TypeCastException;
 import okhttp3.internal.Util;
 import okhttp3.internal.http.HttpHeaders;
 import okhttp3.internal.http2.Header;
@@ -39,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.fail;
 
 public final class HeadersTest {
-  @Test public void readNameValueBlockDropsForbiddenHeadersHttp2() throws IOException {
+  @Test public void readNameValueBlockDropsForbiddenHeadersHttp2() {
     Headers headerBlock = Headers.of(
         ":status", "200 OK",
         ":version", "HTTP/1.1",
@@ -133,7 +131,7 @@ public final class HeadersTest {
 
   @Test public void addUnsafeNonAsciiRejectsUnicodeName() {
     try {
-      Headers headers = new Headers.Builder()
+      new Headers.Builder()
           .addUnsafeNonAscii("héader1", "value1")
           .build();
       fail("Should have complained about invalid value");
@@ -201,7 +199,7 @@ public final class HeadersTest {
     try {
       Headers.of(Collections.singletonMap("User-Agent", null));
       fail();
-    } catch (TypeCastException expected) {
+    } catch (NullPointerException expected) {
     }
   }
 
@@ -831,7 +829,7 @@ public final class HeadersTest {
           .add("testDate", (Date) null)
           .build();
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
   }
 
@@ -850,7 +848,7 @@ public final class HeadersTest {
           .add("Test-Instant", (Instant) null)
           .build();
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
   }
 
@@ -870,7 +868,7 @@ public final class HeadersTest {
           .set("testDate", (Date) null)
           .build();
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
   }
 
@@ -890,7 +888,7 @@ public final class HeadersTest {
           .set("Test-Instant", (Instant) null)
           .build();
       fail();
-    } catch (IllegalArgumentException expected) {
+    } catch (NullPointerException expected) {
     }
   }
 }

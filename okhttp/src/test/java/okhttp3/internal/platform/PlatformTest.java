@@ -15,7 +15,7 @@
  */
 package okhttp3.internal.platform;
 
-import okhttp3.PlatformRule;
+import okhttp3.testing.PlatformRule;
 import org.junit.Rule;
 import org.junit.Test;
 
@@ -41,5 +41,13 @@ public class PlatformTest {
   @Test
   public void testToStringIsClassname() {
     assertThat(new Platform().toString()).isEqualTo("Platform");
+  }
+
+  @Test
+  public void testNotAndroid() {
+    platform.assumeNotAndroid();
+
+    // This is tautological so just confirms that it runs.
+    assertThat(Platform.Companion.isAndroid()).isEqualTo(false);
   }
 }
