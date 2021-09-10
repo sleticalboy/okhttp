@@ -18,14 +18,15 @@ package okhttp3.internal.concurrent
 import java.util.concurrent.RejectedExecutionException
 import okhttp3.TestLogHandler
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Assert.fail
-import org.junit.Rule
-import org.junit.Test
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.extension.RegisterExtension
+import org.junit.jupiter.api.fail
 
 class TaskRunnerTest {
-  @Rule @JvmField val testLogHandler = TestLogHandler(TaskRunner::class.java)
-
   private val taskFaker = TaskFaker()
+
+  @RegisterExtension @JvmField val testLogHandler = TestLogHandler(taskFaker.logger)
+
   private val taskRunner = taskFaker.taskRunner
   private val log = mutableListOf<String>()
   private val redQueue = taskRunner.newQueue()
@@ -612,7 +613,7 @@ class TaskRunnerTest {
           return -1L
         }
       }, 100.µs)
-      fail()
+      fail("")
     } catch (_: RejectedExecutionException) {
     }
 

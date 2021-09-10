@@ -16,36 +16,25 @@
 package okhttp3;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import okio.BufferedSource;
 import okio.Okio;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameter;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ArgumentsSource;
 
 import static okhttp3.internal.Util.immutableListOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Runs the web platform URL tests against Java URL models. */
-@RunWith(Parameterized.class)
 public final class WebPlatformUrlTest {
-  @Parameterized.Parameters(name = "{0}")
-  public static List<Object[]> parameters() {
-    try {
-      List<Object[]> result = new ArrayList<>();
-      for (WebPlatformUrlTestData urlTestData : loadTests()) {
-        result.add(new Object[] {urlTestData});
-      }
-      return result;
-    } catch (IOException e) {
-      throw new AssertionError();
+  public static class TestDataParamProvider extends SimpleProvider {
+    @Override
+    public List<Object> arguments() throws IOException {
+      return new ArrayList<>(loadTests());
     }
   }
-
-  @Parameter
-  public WebPlatformUrlTestData testData;
 
   private static final List<String> HTTP_URL_SCHEMES = immutableListOf("http", "https");
   private static final List<String> KNOWN_FAILURES = immutableListOf(
@@ -61,7 +50,8 @@ public final class WebPlatformUrlTest {
   );
 
   /** Test how {@link HttpUrl} does against the web platform test suite. */
-  @Test public void httpUrl() throws Exception {
+  @ArgumentsSource(TestDataParamProvider.class)
+  @ParameterizedTest public void httpUrl(WebPlatformUrlTestData testData) throws Exception {
     if (!testData.scheme.isEmpty() && !HTTP_URL_SCHEMES.contains(testData.scheme)) {
       System.err.println("Ignoring unsupported scheme " + testData.scheme);
       return;
@@ -74,7 +64,7 @@ public final class WebPlatformUrlTest {
     }
 
     try {
-      testHttpUrl();
+      testHttpUrl(testData);
       if (KNOWN_FAILURES.contains(testData.toString())) {
         System.err.println("Expected failure but was success: " + testData);
       }
@@ -88,7 +78,7 @@ public final class WebPlatformUrlTest {
     }
   }
 
-  private void testHttpUrl() {
+  private void testHttpUrl(WebPlatformUrlTestData testData) {
     HttpUrl url;
     if (testData.base.equals("about:blank")) {
       url = HttpUrl.parse(testData.input);
@@ -121,8 +111,9 @@ public final class WebPlatformUrlTest {
   }
 
   private static List<WebPlatformUrlTestData> loadTests() throws IOException {
-    BufferedSource source = Okio.buffer(Okio.source(
-        WebPlatformUrlTest.class.getResourceAsStream("/web-platform-test-urltestdata.txt")));
+    InputStream resourceAsStream = WebPlatformUrlTest.class.
+            getResourceAsStream("/web-platform-test-urltestdata.txt");
+    BufferedSource source = Okio.buffer(Okio.source(resourceAsStream));
     return WebPlatformUrlTestData.load(source);
   }
 }

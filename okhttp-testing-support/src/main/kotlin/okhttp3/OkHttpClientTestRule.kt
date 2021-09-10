@@ -15,7 +15,6 @@
  */
 package okhttp3
 
-import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 import java.util.logging.Handler
 import java.util.logging.Level
@@ -25,11 +24,11 @@ import java.util.logging.Logger
 import okhttp3.internal.concurrent.TaskRunner
 import okhttp3.internal.http2.Http2
 import okhttp3.testing.Flaky
-import org.junit.Assert.assertEquals
-import org.junit.Assert.fail
-import org.junit.rules.TestRule
-import org.junit.runner.Description
-import org.junit.runners.model.Statement
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.fail
+import org.junit.jupiter.api.extension.AfterEachCallback
+import org.junit.jupiter.api.extension.BeforeEachCallback
+import org.junit.jupiter.api.extension.ExtensionContext
 
 /**
  * Apply this rule to all tests. It adds additional checks for leaked resources and uncaught
@@ -38,25 +37,29 @@ import org.junit.runners.model.Statement
  * Use [newClient] as a factory for a OkHttpClient instances. These instances are specifically
  * configured for testing.
  */
-class OkHttpClientTestRule : TestRule {
+class OkHttpClientTestRule : BeforeEachCallback, AfterEachCallback {
   private val clientEventsList = mutableListOf<String>()
   private var testClient: OkHttpClient? = null
   private var uncaughtException: Throwable? = null
+  private lateinit var testName: String
+  private var defaultUncaughtExceptionHandler: Thread.UncaughtExceptionHandler? = null
+  private var taskQueuesWereIdle: Boolean = false
+
   var logger: Logger? = null
-  lateinit var testName: String
 
   var recordEvents = true
   var recordTaskRunner = false
   var recordFrames = false
   var recordSslDebug = false
 
+  private val sslExcludeFilter = "^(?:Inaccessible trust store|trustStore is|Reload the trust store|Reload trust certs|Reloaded|adding as trusted certificates|Ignore disabled cipher suite|Ignore unsupported cipher suite).*".toRegex()
+
   private val testLogHandler = object : Handler() {
     override fun publish(record: LogRecord) {
-      val name = record.loggerName
-      val recorded = when (name) {
+      val recorded = when (record.loggerName) {
         TaskRunner::class.java.name -> recordTaskRunner
         Http2::class.java.name -> recordFrames
-        "javax.net.ssl" -> recordSslDebug
+        "javax.net.ssl" -> recordSslDebug && !sslExcludeFilter.matches(record.message)
         else -> false
       }
 
@@ -112,8 +115,7 @@ class OkHttpClientTestRule : TestRule {
     if (client == null) {
       client = OkHttpClient.Builder()
           .dns(SINGLE_INET_ADDRESS_DNS) // Prevent unexpected fallback addresses.
-          .eventListenerFactory(
-              EventListener.Factory { ClientRuleEventListener(logger = ::addEvent) })
+          .eventListenerFactory { ClientRuleEventListener(logger = ::addEvent) }
           .build()
       testClient = client
     }
@@ -166,91 +168,72 @@ class OkHttpClientTestRule : TestRule {
       val waitTime = (entryTime + 1_000_000_000L - System.nanoTime())
       if (!queue.idleLatch().await(waitTime, TimeUnit.NANOSECONDS)) {
         TaskRunner.INSTANCE.cancelAll()
-        fail("Queue still active after 1000 ms")
+        fail<Unit>("Queue still active after 1000 ms")
       }
     }
   }
 
-  override fun apply(
-    base: Statement,
-    description: Description
-  ): Statement {
-    return object : Statement() {
-      override fun evaluate() {
-        testName = description.methodName
+  override fun beforeEach(context: ExtensionContext) {
+    testName = context.displayName
 
-        val defaultUncaughtExceptionHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
-          initUncaughtException(throwable)
-        }
-        val taskQueuesWereIdle = TaskRunner.INSTANCE.activeQueues().isEmpty()
-        var failure: Throwable? = null
-        try {
-          applyLogger {
-            addHandler(testLogHandler)
-            level = Level.FINEST
-            useParentHandlers = false
-          }
+    beforeEach()
+  }
 
-          base.evaluate()
-          if (uncaughtException != null) {
-            throw AssertionError("uncaught exception thrown during test", uncaughtException)
-          }
-          logEventsIfFlaky(description)
-        } catch (t: Throwable) {
-          failure = t
-          logEvents()
-          throw t
-        } finally {
-          LogManager.getLogManager().reset()
+  private fun beforeEach() {
+    defaultUncaughtExceptionHandler = Thread.getDefaultUncaughtExceptionHandler()
+    Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
+      initUncaughtException(throwable)
+    }
 
-          Thread.setDefaultUncaughtExceptionHandler(defaultUncaughtExceptionHandler)
-          try {
-            ensureAllConnectionsReleased()
-            releaseClient()
-          } catch (ae: AssertionError) {
-            // Prefer keeping the inflight failure, but don't release this in-use client.
-            if (failure != null) {
-              failure.addSuppressed(ae)
-            } else {
-              failure = ae
-            }
-          }
+    taskQueuesWereIdle = TaskRunner.INSTANCE.activeQueues().isEmpty()
 
-          try {
-            if (taskQueuesWereIdle) {
-              ensureAllTaskQueuesIdle()
-            }
-          } catch (ae: AssertionError) {
-            // Prefer keeping the inflight failure, but don't release this in-use client.
-            if (failure != null) {
-              failure.addSuppressed(ae)
-            } else {
-              failure = ae
-            }
-          }
-
-          if (failure != null) {
-            throw failure
-          }
-        }
-      }
-
-      private fun releaseClient() {
-        testClient?.dispatcher?.executorService?.shutdown()
-      }
+    applyLogger {
+      addHandler(testLogHandler)
+      level = Level.FINEST
+      useParentHandlers = false
     }
   }
 
-  private fun logEventsIfFlaky(description: Description) {
-    if (isTestFlaky(description)) {
+  override fun afterEach(context: ExtensionContext) {
+    val failure = context.executionException.orElseGet { null }
+
+    if (uncaughtException != null) {
+      throw failure + AssertionError("uncaught exception thrown during test", uncaughtException)
+    }
+
+    if (context.isFlaky()) {
       logEvents()
     }
+
+    LogManager.getLogManager().reset()
+
+    var result: Throwable? = failure
+    Thread.setDefaultUncaughtExceptionHandler(defaultUncaughtExceptionHandler)
+    try {
+      ensureAllConnectionsReleased()
+      releaseClient()
+    } catch (ae: AssertionError) {
+      result += ae
+    }
+
+    try {
+      if (taskQueuesWereIdle) {
+        ensureAllTaskQueuesIdle()
+      }
+    } catch (ae: AssertionError) {
+      result += ae
+    }
+
+    if (result != null) throw result
   }
 
-  private fun isTestFlaky(description: Description): Boolean {
-    return description.annotations.any { it.annotationClass == Flaky::class } ||
-        description.testClass.annotations.any { it.annotationClass == Flaky::class }
+  private fun releaseClient() {
+    testClient?.dispatcher?.executorService?.shutdown()
+  }
+
+  private fun ExtensionContext.isFlaky(): Boolean {
+    return (testMethod.orElseGet { null }?.isAnnotationPresent(Flaky::class.java) == true) ||
+      (testClass.orElseGet { null }?.isAnnotationPresent(Flaky::class.java) == true)
   }
 
   @Synchronized private fun logEvents() {
@@ -269,11 +252,17 @@ class OkHttpClientTestRule : TestRule {
      * A network that resolves only one IP address per host. Use this when testing route selection
      * fallbacks to prevent the host machine's various IP addresses from interfering.
      */
-    private val SINGLE_INET_ADDRESS_DNS = object : Dns {
-      override fun lookup(hostname: String): List<InetAddress> {
-        val addresses = Dns.SYSTEM.lookup(hostname)
-        return listOf(addresses[0])
+    private val SINGLE_INET_ADDRESS_DNS = Dns { hostname ->
+      val addresses = Dns.SYSTEM.lookup(hostname)
+      listOf(addresses[0])
+    }
+
+    private operator fun Throwable?.plus(throwable: Throwable): Throwable {
+      if (this != null) {
+        addSuppressed(throwable)
+        return this
       }
+      return throwable
     }
   }
 }

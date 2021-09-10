@@ -93,7 +93,8 @@ class Http2ExchangeCodec(
   }
 
   override fun readResponseHeaders(expectContinue: Boolean): Response.Builder? {
-    val headers = stream!!.takeHeaders()
+    val stream = stream ?: throw IOException("stream wasn't created")
+    val headers = stream.takeHeaders()
     val responseBuilder = readHttp2HeadersList(headers, protocol)
     return if (expectContinue && responseBuilder.code == HTTP_CONTINUE) {
       null
@@ -169,7 +170,7 @@ class Http2ExchangeCodec(
 
       for (i in 0 until headers.size) {
         // header names must be lowercase.
-        val name = headers.name(i).toLowerCase(Locale.US)
+        val name = headers.name(i).lowercase(Locale.US)
         if (name !in HTTP_2_SKIPPED_REQUEST_HEADERS ||
             name == TE && headers.value(i) == "trailers") {
           result.add(Header(name, headers.value(i)))

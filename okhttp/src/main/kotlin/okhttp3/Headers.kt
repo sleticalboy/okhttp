@@ -28,6 +28,7 @@ import okhttp3.Headers.Builder
 import okhttp3.internal.format
 import okhttp3.internal.http.toHttpDateOrNull
 import okhttp3.internal.http.toHttpDateString
+import okhttp3.internal.isSensitiveHeader
 import org.codehaus.mojo.animal_sniffer.IgnoreJRERequirement
 
 /**
@@ -180,12 +181,27 @@ class Headers private constructor(
 
   override fun hashCode(): Int = namesAndValues.contentHashCode()
 
+  /**
+   * Returns header names and values. The names and values are separated by `: ` and each pair is
+   * followed by a newline character `\n`.
+   *
+   * Since OkHttp 5 this redacts these sensitive headers:
+   *
+   *  * `Authorization`
+   *  * `Cookie`
+   *  * `Proxy-Authorization`
+   *  * `Set-Cookie`
+   *
+   * To get all headers as a human-readable string use `toMultimap().toString()`.
+   */
   override fun toString(): String {
     return buildString {
       for (i in 0 until size) {
-        append(name(i))
+        val name = name(i)
+        val value = value(i)
+        append(name)
         append(": ")
-        append(value(i))
+        append(if (isSensitiveHeader(name)) "██" else value)
         append("\n")
       }
     }
@@ -194,7 +210,7 @@ class Headers private constructor(
   fun toMultimap(): Map<String, List<String>> {
     val result = TreeMap<String, MutableList<String>>(String.CASE_INSENSITIVE_ORDER)
     for (i in 0 until size) {
-      val name = name(i).toLowerCase(Locale.US)
+      val name = name(i).lowercase(Locale.US)
       var values: MutableList<String>? = result[name]
       if (values == null) {
         values = ArrayList(2)
@@ -370,7 +386,7 @@ class Headers private constructor(
       }
 
       // Check for malformed headers.
-      for (i in 0 until namesAndValues.size step 2) {
+      for (i in namesAndValues.indices step 2) {
         val name = namesAndValues[i]
         val value = namesAndValues[i + 1]
         checkName(name)
@@ -420,19 +436,20 @@ class Headers private constructor(
 
     private fun checkName(name: String) {
       require(name.isNotEmpty()) { "name is empty" }
-      for (i in 0 until name.length) {
+      for (i in name.indices) {
         val c = name[i]
         require(c in '\u0021'..'\u007e') {
-          format("Unexpected char %#04x at %d in header name: %s", c.toInt(), i, name)
+          format("Unexpected char %#04x at %d in header name: %s", c.code, i, name)
         }
       }
     }
 
     private fun checkValue(value: String, name: String) {
-      for (i in 0 until value.length) {
+      for (i in value.indices) {
         val c = value[i]
         require(c == '\t' || c in '\u0020'..'\u007e') {
-          format("Unexpected char %#04x at %d in %s value: %s", c.toInt(), i, name, value)
+          format("Unexpected char %#04x at %d in %s value", c.code, i, name) +
+              (if (isSensitiveHeader(name)) "" else ": $value")
         }
       }
     }

@@ -15,15 +15,6 @@
  */
 package okhttp3
 
-import java.net.InetAddress
-import java.net.MalformedURLException
-import java.net.URI
-import java.net.URISyntaxException
-import java.net.URL
-import java.nio.charset.Charset
-import java.nio.charset.StandardCharsets.UTF_8
-import java.util.Collections
-import java.util.LinkedHashSet
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.internal.canParseAsIpAddress
@@ -34,6 +25,15 @@ import okhttp3.internal.parseHexDigit
 import okhttp3.internal.publicsuffix.PublicSuffixDatabase
 import okhttp3.internal.toCanonicalHost
 import okio.Buffer
+import java.net.InetAddress
+import java.net.MalformedURLException
+import java.net.URI
+import java.net.URISyntaxException
+import java.net.URL
+import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets.UTF_8
+import java.util.Collections
+import java.util.LinkedHashSet
 
 /**
  * A uniform resource locator (URL) with a scheme of either `http` or `https`. Use this class to
@@ -192,7 +192,7 @@ import okio.Buffer
  * names to avoid confusing characters. This includes basic case folding: transforming shouting
  * `SQUARE.COM` into cool and casual `square.com`. It also handles more exotic characters. For
  * example, the Unicode trademark sign (™) could be confused for the letters "TM" in
- * `http://ho™mail.com`. To mitigate this, the single character (™) maps to the string (tm). There
+ * `http://ho™ail.com`. To mitigate this, the single character (™) maps to the string (tm). There
  * is similar policy for all of the 1.1 million Unicode code points. Note that some code points such
  * as "\ud83c\udf69" are not mapped and cannot be used in a hostname.
  *
@@ -778,14 +778,14 @@ class HttpUrl internal constructor(
       message = "moved to toUrl()",
       replaceWith = ReplaceWith(expression = "toUrl()"),
       level = DeprecationLevel.ERROR)
-  fun url() = toUrl()
+  fun url(): URL = toUrl()
 
   @JvmName("-deprecated_uri")
   @Deprecated(
       message = "moved to toUri()",
       replaceWith = ReplaceWith(expression = "toUri()"),
       level = DeprecationLevel.ERROR)
-  fun uri() = toUri()
+  fun uri(): URI = toUri()
 
   @JvmName("-deprecated_scheme")
   @Deprecated(
@@ -1257,8 +1257,9 @@ class HttpUrl internal constructor(
       } else if (base != null) {
         this.scheme = base.scheme
       } else {
+        val truncated = if (input.length > 6) input.take(6) + "..." else input
         throw IllegalArgumentException(
-            "Expected URL scheme 'http' or 'https' but no colon was found")
+            "Expected URL scheme 'http' or 'https' but no scheme was found for $truncated")
       }
 
       // Authority.
@@ -1279,12 +1280,12 @@ class HttpUrl internal constructor(
         authority@ while (true) {
           val componentDelimiterOffset = input.delimiterOffset("@/\\?#", pos, limit)
           val c = if (componentDelimiterOffset != limit) {
-            input[componentDelimiterOffset].toInt()
+            input[componentDelimiterOffset].code
           } else {
             -1
           }
           when (c) {
-            '@'.toInt() -> {
+            '@'.code -> {
               // User info precedes.
               if (!hasPassword) {
                 val passwordColonOffset = input.delimiterOffset(':', pos, componentDelimiterOffset)
@@ -1320,7 +1321,7 @@ class HttpUrl internal constructor(
               pos = componentDelimiterOffset + 1
             }
 
-            -1, '/'.toInt(), '\\'.toInt(), '?'.toInt(), '#'.toInt() -> {
+            -1, '/'.code, '\\'.code, '?'.code, '#'.code -> {
               // Host info precedes.
               val portColonOffset = portColonOffset(input, pos, componentDelimiterOffset)
               if (portColonOffset + 1 < componentDelimiterOffset) {
@@ -1563,7 +1564,7 @@ class HttpUrl internal constructor(
     internal const val QUERY_COMPONENT_REENCODE_SET = " \"'<>#&="
     internal const val QUERY_COMPONENT_ENCODE_SET = " !\"#$&'(),/:;<=>?@[]\\^`{|}~"
     internal const val QUERY_COMPONENT_ENCODE_SET_URI = "\\^`{|}"
-    internal const val FORM_ENCODE_SET = " \"':;<=>@[]^`{}|/\\?#&!$(),~"
+    internal const val FORM_ENCODE_SET = " !\"#$&'()+,/:;<=>?@[\\]^`{|}~"
     internal const val FRAGMENT_ENCODE_SET = ""
     internal const val FRAGMENT_ENCODE_SET_URI = " \"#<>\\^`{|}"
 
@@ -1721,7 +1722,7 @@ class HttpUrl internal constructor(
       var i = pos
       while (i < limit) {
         codePoint = encoded.codePointAt(i)
-        if (codePoint == '%'.toInt() && i + 2 < limit) {
+        if (codePoint == '%'.code && i + 2 < limit) {
           val d1 = encoded[i + 1].parseHexDigit()
           val d2 = encoded[i + 2].parseHexDigit()
           if (d1 != -1 && d2 != -1) {
@@ -1730,8 +1731,8 @@ class HttpUrl internal constructor(
             i += Character.charCount(codePoint)
             continue
           }
-        } else if (codePoint == '+'.toInt() && plusIsSpace) {
-          writeByte(' '.toInt())
+        } else if (codePoint == '+'.code && plusIsSpace) {
+          writeByte(' '.code)
           i++
           continue
         }
@@ -1785,9 +1786,9 @@ class HttpUrl internal constructor(
             codePoint == 0x7f ||
             codePoint >= 0x80 && !unicodeAllowed ||
             codePoint.toChar() in encodeSet ||
-            codePoint == '%'.toInt() &&
+            codePoint == '%'.code &&
             (!alreadyEncoded || strict && !isPercentEncoded(i, limit)) ||
-            codePoint == '+'.toInt() && plusIsSpace) {
+            codePoint == '+'.code && plusIsSpace) {
           // Slow path: the character at i requires encoding!
           val out = Buffer()
           out.writeUtf8(this, pos, i)
@@ -1827,17 +1828,20 @@ class HttpUrl internal constructor(
       var i = pos
       while (i < limit) {
         codePoint = input.codePointAt(i)
-        if (alreadyEncoded && (codePoint == '\t'.toInt() || codePoint == '\n'.toInt() ||
-                codePoint == '\u000c'.toInt() || codePoint == '\r'.toInt())) {
+        if (alreadyEncoded && (codePoint == '\t'.code || codePoint == '\n'.code ||
+                codePoint == '\u000c'.code || codePoint == '\r'.code)) {
           // Skip this character.
-        } else if (codePoint == '+'.toInt() && plusIsSpace) {
+        } else if (codePoint == ' '.code && encodeSet === FORM_ENCODE_SET) {
+          // Encode ' ' as '+'.
+          writeUtf8("+")
+        } else if (codePoint == '+'.code && plusIsSpace) {
           // Encode '+' as '%2B' since we permit ' ' to be encoded as either '+' or '%20'.
           writeUtf8(if (alreadyEncoded) "+" else "%2B")
         } else if (codePoint < 0x20 ||
             codePoint == 0x7f ||
             codePoint >= 0x80 && !unicodeAllowed ||
             codePoint.toChar() in encodeSet ||
-            codePoint == '%'.toInt() &&
+            codePoint == '%'.code &&
             (!alreadyEncoded || strict && !input.isPercentEncoded(i, limit))) {
           // Percent encode this character.
           if (encodedCharBuffer == null) {
@@ -1852,9 +1856,9 @@ class HttpUrl internal constructor(
 
           while (!encodedCharBuffer.exhausted()) {
             val b = encodedCharBuffer.readByte().toInt() and 0xff
-            writeByte('%'.toInt())
-            writeByte(HEX_DIGITS[b shr 4 and 0xf].toInt())
-            writeByte(HEX_DIGITS[b and 0xf].toInt())
+            writeByte('%'.code)
+            writeByte(HEX_DIGITS[b shr 4 and 0xf].code)
+            writeByte(HEX_DIGITS[b and 0xf].code)
           }
         } else {
           // This character doesn't need encoding. Just copy it over.

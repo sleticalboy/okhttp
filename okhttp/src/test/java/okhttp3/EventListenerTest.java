@@ -29,6 +29,9 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
+import mockwebserver3.SocketPolicy;
 import okhttp3.CallEvent.CallEnd;
 import okhttp3.CallEvent.CallFailed;
 import okhttp3.CallEvent.CallStart;
@@ -54,9 +57,6 @@ import okhttp3.internal.DoubleInetAddressDns;
 import okhttp3.internal.RecordingOkAuthenticator;
 import okhttp3.internal.connection.RealConnectionPool;
 import okhttp3.logging.HttpLoggingInterceptor;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.SocketPolicy;
 import okhttp3.testing.Flaky;
 import okhttp3.testing.PlatformRule;
 import okhttp3.tls.HandshakeCertificates;
@@ -66,30 +66,32 @@ import org.hamcrest.BaseMatcher;
 import org.hamcrest.CoreMatchers;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.Timeout;
+import org.hamcrest.MatcherAssert;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import static java.util.Arrays.asList;
 import static okhttp3.tls.internal.TlsUtil.localhost;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.CoreMatchers.any;
 import static org.hamcrest.CoreMatchers.equalTo;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.Assume.assumeThat;
 
 @Flaky // STDOUT logging enabled for test
+@Timeout(30)
+@Tag("Slow")
 public final class EventListenerTest {
   public static final Matcher<Response> anyResponse = CoreMatchers.any(Response.class);
 
-  @Rule public final PlatformRule platform = new PlatformRule();
-  @Rule public final MockWebServer server = new MockWebServer();
-  @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
-  @Rule public final Timeout timeoutRule = new Timeout(20, TimeUnit.SECONDS);
+  @RegisterExtension public final PlatformRule platform = new PlatformRule();
+  @RegisterExtension public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
 
+  private MockWebServer server;
   private final RecordingEventListener listener = new RecordingEventListener();
   private final HandshakeCertificates handshakeCertificates = localhost();
 
@@ -99,7 +101,9 @@ public final class EventListenerTest {
   private SocksProxy socksProxy;
   private Cache cache = null;
 
-  @Before public void setUp() {
+  @BeforeEach public void setUp(MockWebServer server) {
+    this.server = server;
+
     platform.assumeNotOpenJSSE();
     platform.assumeNotBouncyCastle();
 
@@ -107,7 +111,7 @@ public final class EventListenerTest {
     listener.forbidLock(client.dispatcher());
   }
 
-  @After public void tearDown() throws Exception {
+  @AfterEach public void tearDown() throws Exception {
     if (socksProxy != null) {
       socksProxy.shutdown();
     }
@@ -318,7 +322,7 @@ public final class EventListenerTest {
 
     if (requestHeaderLength != null) {
       RequestHeadersEnd responseHeadersEnd = listener.removeUpToEvent(RequestHeadersEnd.class);
-      Assert.assertThat("request header length", responseHeadersEnd.getHeaderLength(),
+      MatcherAssert.assertThat("request header length", responseHeadersEnd.getHeaderLength(),
           requestHeaderLength);
     } else {
       assertThat(listener.recordedEventTypes()).doesNotContain("RequestHeadersEnd");
@@ -326,14 +330,14 @@ public final class EventListenerTest {
 
     if (requestBodyBytes != null) {
       RequestBodyEnd responseBodyEnd = listener.removeUpToEvent(RequestBodyEnd.class);
-      Assert.assertThat("request body bytes", responseBodyEnd.getBytesWritten(), requestBodyBytes);
+      MatcherAssert.assertThat("request body bytes", responseBodyEnd.getBytesWritten(), requestBodyBytes);
     } else {
       assertThat(listener.recordedEventTypes()).doesNotContain("RequestBodyEnd");
     }
 
     if (responseHeaderLength != null) {
       ResponseHeadersEnd responseHeadersEnd = listener.removeUpToEvent(ResponseHeadersEnd.class);
-      Assert.assertThat("response header length", responseHeadersEnd.getHeaderLength(),
+      MatcherAssert.assertThat("response header length", responseHeadersEnd.getHeaderLength(),
           responseHeaderLength);
     } else {
       assertThat(listener.recordedEventTypes()).doesNotContain("ResponseHeadersEnd");
@@ -341,7 +345,7 @@ public final class EventListenerTest {
 
     if (responseBodyBytes != null) {
       ResponseBodyEnd responseBodyEnd = listener.removeUpToEvent(ResponseBodyEnd.class);
-      Assert.assertThat("response body bytes", responseBodyEnd.getBytesRead(), responseBodyBytes);
+      MatcherAssert.assertThat("response body bytes", responseBodyEnd.getBytesRead(), responseBodyBytes);
     } else {
       assertThat(listener.recordedEventTypes()).doesNotContain("ResponseBodyEnd");
     }
@@ -1118,7 +1122,7 @@ public final class EventListenerTest {
     assertThat(listener.recordedEventTypes()).containsExactly(
         "CallStart", "ProxySelectStart", "ProxySelectEnd", "DnsStart", "DnsEnd", "ConnectStart",
         "ConnectEnd", "ConnectionAcquired", "RequestHeadersStart", "RequestHeadersEnd",
-        "RequestBodyStart", "RequestFailed", "ConnectionReleased", "CallFailed");
+        "RequestBodyStart", "RequestFailed", "ResponseFailed", "ConnectionReleased", "CallFailed");
   }
 
   @Test public void requestBodySuccessHttp1OverHttps() throws IOException {

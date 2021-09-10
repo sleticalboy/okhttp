@@ -32,37 +32,38 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509KeyManager;
 import javax.net.ssl.X509TrustManager;
 import javax.security.auth.x500.X500Principal;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
+import mockwebserver3.junit5.internal.MockWebServerExtension;
 import okhttp3.Call;
-import okhttp3.CallEvent;
 import okhttp3.OkHttpClient;
 import okhttp3.OkHttpClientTestRule;
 import okhttp3.RecordingEventListener;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.internal.http2.ConnectionShutdownException;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.testing.PlatformRule;
-import okhttp3.testing.PlatformVersion;
 import okhttp3.tls.HandshakeCertificates;
 import okhttp3.tls.HeldCertificate;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import static java.util.Arrays.asList;
-import static okhttp3.testing.PlatformRule.getPlatformSystemProperty;
 import static okhttp3.tls.internal.TlsUtil.newKeyManager;
 import static okhttp3.tls.internal.TlsUtil.newTrustManager;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.fail;
 
+@Tag("Slowish")
+@ExtendWith(MockWebServerExtension.class)
 public final class ClientAuthTest {
-  @Rule public final PlatformRule platform = new PlatformRule();
-  @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
-  @Rule public final MockWebServer server = new MockWebServer();
+  @RegisterExtension public final PlatformRule platform = new PlatformRule();
+  @RegisterExtension public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
 
+  private MockWebServer server;
   private HeldCertificate serverRootCa;
   private HeldCertificate serverIntermediateCa;
   private HeldCertificate serverCert;
@@ -70,8 +71,10 @@ public final class ClientAuthTest {
   private HeldCertificate clientIntermediateCa;
   private HeldCertificate clientCert;
 
-  @Before
-  public void setUp() {
+  @BeforeEach
+  public void setUp(MockWebServer server) {
+    this.server = server;
+
     platform.assumeNotOpenJSSE();
     platform.assumeNotBouncyCastle();
 
@@ -205,11 +208,13 @@ public final class ClientAuthTest {
       call.execute();
       fail();
     } catch (SSLHandshakeException expected) {
+      // JDK 11+
     } catch (SSLException expected) {
-      assertThat(PlatformVersion.INSTANCE.getMajorVersion()).isGreaterThanOrEqualTo(11);
+      // javax.net.ssl.SSLException: readRecord
     } catch (SocketException expected) {
-      assertThat(getPlatformSystemProperty()).isIn(PlatformRule.JDK9_PROPERTY,
-          PlatformRule.CONSCRYPT_PROPERTY);
+      // Conscrypt, JDK 8 (>= 292), JDK 9
+    } catch (IOException expected) {
+      assertThat(expected.getMessage()).isEqualTo("exhausted all routes");
     }
   }
 
@@ -259,14 +264,15 @@ public final class ClientAuthTest {
       call.execute();
       fail();
     } catch (SSLHandshakeException expected) {
+      // JDK 11+
     } catch (SSLException expected) {
       // javax.net.ssl.SSLException: readRecord
-      assertThat(PlatformVersion.INSTANCE.getMajorVersion()).isGreaterThanOrEqualTo(11);
     } catch (SocketException expected) {
-      assertThat(getPlatformSystemProperty()).isIn(PlatformRule.JDK9_PROPERTY,
-          PlatformRule.CONSCRYPT_PROPERTY);
+      // Conscrypt, JDK 8 (>= 292), JDK 9
     } catch (ConnectionShutdownException expected) {
       // It didn't fail until it reached the application layer.
+    } catch (IOException expected) {
+      assertThat(expected.getMessage()).isEqualTo("exhausted all routes");
     }
   }
 

@@ -22,11 +22,11 @@ import java.net.URI;
 import java.util.UUID;
 import okio.Buffer;
 import okio.ByteString;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public final class RequestTest {
   @Test public void string() throws Exception {

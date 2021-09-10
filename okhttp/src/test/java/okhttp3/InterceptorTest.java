@@ -28,10 +28,11 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.RecordedRequest;
-import okhttp3.mockwebserver.SocketPolicy;
+import kotlin.Unit;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
+import mockwebserver3.RecordedRequest;
+import mockwebserver3.SocketPolicy;
 import okio.Buffer;
 import okio.BufferedSink;
 import okio.ForwardingSink;
@@ -40,19 +41,27 @@ import okio.GzipSink;
 import okio.Okio;
 import okio.Sink;
 import okio.Source;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
+import static okhttp3.TestUtil.assertSuppressed;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.fail;
 
+@Tag("Slow")
 public final class InterceptorTest {
-  @Rule public MockWebServer server = new MockWebServer();
-  @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
+  @RegisterExtension public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
 
+  private MockWebServer server;
   private OkHttpClient client = clientTestRule.newClient();
-  private RecordingCallback callback = new RecordingCallback();
+  private final RecordingCallback callback = new RecordingCallback();
+
+  @BeforeEach
+  public void setUp(MockWebServer server) throws Exception {
+    this.server = server;
+  }
 
   @Test public void applicationInterceptorsCanShortCircuitResponses() throws Exception {
     server.shutdown(); // Accept no connections.
@@ -538,7 +547,10 @@ public final class InterceptorTest {
     RecordedResponse recordedResponse = callback.await(server.url("/"));
     assertThat(recordedResponse.failure)
         .hasMessage("canceled due to java.lang.RuntimeException: boom!");
-    assertThat(recordedResponse.failure).hasSuppressedException(boom);
+    assertSuppressed(recordedResponse.failure, throwables -> {
+      assertThat(throwables).contains(boom);
+      return Unit.INSTANCE;
+    });
     assertThat(call.isCanceled()).isTrue();
 
     assertThat(executor.takeException()).isEqualTo(boom);

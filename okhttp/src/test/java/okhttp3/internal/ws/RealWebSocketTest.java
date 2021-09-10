@@ -30,16 +30,18 @@ import okhttp3.internal.concurrent.TaskRunner;
 import okio.ByteString;
 import okio.Okio;
 import okio.Pipe;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Ignore;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
 import static okhttp3.internal.ws.RealWebSocket.DEFAULT_MINIMUM_DEFLATE_SIZE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.data.Offset.offset;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.fail;
 
+@Tag("Slow")
 public final class RealWebSocketTest {
   // NOTE: Fields are named 'client' and 'server' for cognitive simplicity. This differentiation has
   // zero effect on the behavior of the WebSocket API which is why tests are only written once
@@ -49,15 +51,15 @@ public final class RealWebSocketTest {
   private final Pipe client2Server = new Pipe(8192L);
   private final Pipe server2client = new Pipe(8192L);
 
-  private TestStreams client = new TestStreams(true, server2client, client2Server);
-  private TestStreams server = new TestStreams(false, client2Server, server2client);
+  private final TestStreams client = new TestStreams(true, server2client, client2Server);
+  private final TestStreams server = new TestStreams(false, client2Server, server2client);
 
-  @Before public void setUp() throws IOException {
+  @BeforeEach public void setUp() throws IOException {
     client.initWebSocket(random, 0);
     server.initWebSocket(random, 0);
   }
 
-  @After public void tearDown() throws Exception {
+  @AfterEach public void tearDown() throws Exception {
     client.listener.assertExhausted();
     server.listener.assertExhausted();
     server.getSource().close();
@@ -274,7 +276,7 @@ public final class RealWebSocketTest {
     client.listener.assertFailure(IOException.class, "source is closed");
   }
 
-  @Ignore // TODO(jwilson): come up with a way to test unchecked exceptions on the writer thread.
+  @Disabled // TODO(jwilson): come up with a way to test unchecked exceptions on the writer thread.
   @Test public void closeMessageAndConnectionCloseThrowingDoesNotMaskOriginal() throws IOException {
     client.getSink().close();
     client.closeThrows = true;
@@ -284,7 +286,7 @@ public final class RealWebSocketTest {
     assertThat(client.closed).isTrue();
   }
 
-  @Ignore // TODO(jwilson): come up with a way to test unchecked exceptions on the writer thread.
+  @Disabled // TODO(jwilson): come up with a way to test unchecked exceptions on the writer thread.
   @Test public void peerConnectionCloseThrowingPropagates() throws IOException {
     client.closeThrows = true;
 
@@ -304,19 +306,19 @@ public final class RealWebSocketTest {
     server.processNextFrame(); // Ping.
     client.processNextFrame(); // Pong.
     long elapsedUntilPing1 = System.nanoTime() - startNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPing1)).isCloseTo((double) 500, offset(
+    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPing1)).isCloseTo(500, offset(
         250d));
 
     server.processNextFrame(); // Ping.
     client.processNextFrame(); // Pong.
     long elapsedUntilPing2 = System.nanoTime() - startNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPing2)).isCloseTo((double) 1000, offset(
+    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPing2)).isCloseTo(1000, offset(
         250d));
 
     server.processNextFrame(); // Ping.
     client.processNextFrame(); // Pong.
     long elapsedUntilPing3 = System.nanoTime() - startNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPing3)).isCloseTo((double) 1500, offset(
+    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPing3)).isCloseTo(1500, offset(
         250d));
   }
 
@@ -328,7 +330,7 @@ public final class RealWebSocketTest {
     client.listener.assertFailure(SocketTimeoutException.class,
         "sent ping but didn't receive pong within 500ms (after 0 successful ping/pongs)");
     long elapsedUntilFailure = System.nanoTime() - startNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilFailure)).isCloseTo((double) 1000, offset(
+    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilFailure)).isCloseTo(1000, offset(
         250d));
   }
 
@@ -348,7 +350,7 @@ public final class RealWebSocketTest {
     server.processNextFrame(); // Ping.
     client.processNextFrame(); // Pong.
     long elapsedUntilPing = System.nanoTime() - startNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPing)).isCloseTo((double) 500, offset(
+    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilPing)).isCloseTo(500, offset(
         250d));
 
     // After 1000ms the client will attempt a ping 2, but we don't process it. That'll cause the
@@ -356,7 +358,7 @@ public final class RealWebSocketTest {
     client.listener.assertFailure(SocketTimeoutException.class,
         "sent ping but didn't receive pong within 500ms (after 1 successful ping/pongs)");
     long elapsedUntilFailure = System.nanoTime() - startNanos;
-    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilFailure)).isCloseTo((double) 1500, offset(
+    assertThat((double) TimeUnit.NANOSECONDS.toMillis(elapsedUntilFailure)).isCloseTo(1500, offset(
         250d));
   }
 

@@ -22,7 +22,7 @@ import javax.net.ssl.SSLSocket;
 import okhttp3.ConnectionSpec;
 import okhttp3.TlsVersion;
 import okhttp3.tls.HandshakeCertificates;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import static java.util.Arrays.asList;
 import static okhttp3.tls.internal.TlsUtil.localhost;
@@ -32,7 +32,7 @@ public class ConnectionSpecSelectorTest {
   public static final SSLHandshakeException RETRYABLE_EXCEPTION = new SSLHandshakeException(
       "Simulated handshake exception");
 
-  private HandshakeCertificates handshakeCertificates = localhost();
+  private final HandshakeCertificates handshakeCertificates = localhost();
 
   @Test
   public void nonRetryableIOException() throws Exception {

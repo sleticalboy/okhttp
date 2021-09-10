@@ -32,35 +32,41 @@ import java.util.List;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.X509TrustManager;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
 import okhttp3.internal.platform.Platform;
 import okhttp3.internal.proxy.NullProxySelector;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.testing.PlatformRule;
-import org.junit.After;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotSame;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public final class OkHttpClientTest {
-  @Rule public PlatformRule platform = new PlatformRule();
-
-  @Rule public final MockWebServer server = new MockWebServer();
-  @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
-
   private static final ProxySelector DEFAULT_PROXY_SELECTOR = ProxySelector.getDefault();
   private static final CookieHandler DEFAULT_COOKIE_HANDLER = CookieManager.getDefault();
   private static final ResponseCache DEFAULT_RESPONSE_CACHE = ResponseCache.getDefault();
 
-  @After public void tearDown() throws Exception {
+  @RegisterExtension public PlatformRule platform = new PlatformRule();
+  @RegisterExtension public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
+
+  private MockWebServer server;
+
+  @BeforeEach
+  public void setUp(MockWebServer server) throws Exception {
+    this.server = server;
+  }
+
+  @AfterEach public void tearDown() throws Exception {
     ProxySelector.setDefault(DEFAULT_PROXY_SELECTOR);
     CookieManager.setDefault(DEFAULT_COOKIE_HANDLER);
     ResponseCache.setDefault(DEFAULT_RESPONSE_CACHE);

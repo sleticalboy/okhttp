@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import javax.net.ssl.HostnameVerifier;
+import mockwebserver3.junit5.internal.MockWebServerExtension;
 import okhttp3.HttpUrl;
 import okhttp3.Interceptor;
 import okhttp3.MediaType;
@@ -34,27 +35,28 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 import okhttp3.logging.HttpLoggingInterceptor.Level;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
 import okhttp3.tls.HandshakeCertificates;
 import okio.Buffer;
 import okio.BufferedSink;
 import okio.ByteString;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import static okhttp3.tls.internal.TlsUtil.localhost;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.junit.Assert.fail;
-import static org.junit.Assume.assumeThat;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+@ExtendWith(MockWebServerExtension.class)
 public final class HttpLoggingInterceptorTest {
   private static final MediaType PLAIN = MediaType.get("text/plain; charset=utf-8");
 
-  @Rule public final PlatformRule platform = new PlatformRule();
-  @Rule public final MockWebServer server = new MockWebServer();
+  @RegisterExtension public final PlatformRule platform = new PlatformRule();
+  private MockWebServer server;
 
   private final HandshakeCertificates handshakeCertificates = localhost();
   private final HostnameVerifier hostnameVerifier = new RecordingHostnameVerifier();
@@ -77,7 +79,9 @@ public final class HttpLoggingInterceptorTest {
     applicationInterceptor.setLevel(level);
   }
 
-  @Before public void setUp() {
+  @BeforeEach public void setUp(MockWebServer server) {
+    this.server = server;
+
     client = new OkHttpClient.Builder()
         .addNetworkInterceptor(chain -> extraNetworkInterceptor != null
             ? extraNetworkInterceptor.intercept(chain)
@@ -762,7 +766,7 @@ public final class HttpLoggingInterceptorTest {
 
     server.enqueue(new MockResponse());
     Response response = client.newCall(request().build()).execute();
-    assumeThat(response.protocol(), equalTo(Protocol.HTTP_2));
+    assumeTrue(response.protocol().equals(Protocol.HTTP_2));
 
     applicationLogs
         .assertLogEqual("--> GET " + url)
@@ -863,7 +867,7 @@ public final class HttpLoggingInterceptorTest {
         .post(asyncRequestBody)
         .build();
     Response response = client.newCall(request).execute();
-    assumeThat(response.protocol(), equalTo(Protocol.HTTP_2));
+    assumeTrue(response.protocol().equals(Protocol.HTTP_2));
 
     assertThat(response.body().string()).isEqualTo("Hello response!");
 

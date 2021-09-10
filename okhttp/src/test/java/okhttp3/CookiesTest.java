@@ -27,24 +27,32 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.RecordedRequest;
-import org.junit.Rule;
-import org.junit.Test;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
+import mockwebserver3.RecordedRequest;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import static java.net.CookiePolicy.ACCEPT_ORIGINAL_SERVER;
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.data.Offset.offset;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /** Derived from Android's CookiesTest. */
+@Timeout(30)
 public class CookiesTest {
-  @Rule public final MockWebServer server = new MockWebServer();
-  @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
+  @RegisterExtension public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
 
+  private MockWebServer server;
   private OkHttpClient client = clientTestRule.newClient();
+
+  @BeforeEach
+  public void setUp(MockWebServer server) throws Exception {
+    this.server = server;
+  }
 
   @Test
   public void testNetscapeResponse() throws Exception {
@@ -162,8 +170,7 @@ public class CookiesTest {
     final HttpUrl serverUrl = urlWithIpAddress(server, "/");
 
     CookieHandler androidCookieHandler = new CookieHandler() {
-      @Override public Map<String, List<String>> get(URI uri, Map<String, List<String>> map)
-          throws IOException {
+      @Override public Map<String, List<String>> get(URI uri, Map<String, List<String>> map) {
         return Collections.singletonMap("Cookie", Collections.singletonList("$Version=\"1\"; "
             + "a=\"android\";$Path=\"/\";$Domain=\"" + serverUrl.host() + "\"; "
             + "b=\"banana\";$Path=\"/\";$Domain=\"" + serverUrl.host() + "\""));
@@ -243,7 +250,7 @@ public class CookiesTest {
     client = client.newBuilder()
         .cookieJar(new JavaNetCookieJar(new CookieManager() {
           @Override public Map<String, List<String>> get(URI uri,
-              Map<String, List<String>> requestHeaders) throws IOException {
+              Map<String, List<String>> requestHeaders) {
             Map<String, List<String>> result = new LinkedHashMap<>();
             result.put("COOKIE", Collections.singletonList("Bar=bar"));
             result.put("cooKIE2", Collections.singletonList("Baz=baz"));
@@ -312,6 +319,29 @@ public class CookiesTest {
     HttpUrl url2 = HttpUrl.get("https://www.squareup.com/");
     List<Cookie> actualCookies = cookieJar.loadForRequest(url2);
     assertThat(actualCookies).isEmpty();
+  }
+
+  @Test public void testQuoteStripping() throws Exception {
+    client = client.newBuilder()
+            .cookieJar(new JavaNetCookieJar(new CookieManager() {
+              @Override public Map<String, List<String>> get(URI uri,
+                                                             Map<String, List<String>> requestHeaders) {
+                Map<String, List<String>> result = new LinkedHashMap<>();
+                result.put("COOKIE", Collections.singletonList("Bar=\""));
+                result.put("cooKIE2", Collections.singletonList("Baz=\"baz\""));
+                return result;
+              }
+            }))
+            .build();
+
+    server.enqueue(new MockResponse());
+
+    get(server.url("/"));
+
+    RecordedRequest request = server.takeRequest();
+    assertThat(request.getHeader("Cookie")).isEqualTo("Bar=\"; Baz=baz");
+    assertThat(request.getHeader("Cookie2")).isNull();
+    assertThat(request.getHeader("Quux")).isNull();
   }
 
   private HttpUrl urlWithIpAddress(MockWebServer server, String path) throws Exception {

@@ -174,12 +174,14 @@ class Main : Runnable {
     return builder.build()
   }
 
-  public fun createRequest(): Request {
+  fun createRequest(): Request {
     val request = Request.Builder()
 
     val requestMethod = method ?: if (data != null) "POST" else "GET"
 
-    request.url(url!!)
+    val url = url ?: throw IllegalArgumentException("No url provided")
+
+    request.url(url)
 
     data?.let {
       request.method(requestMethod, it.toRequestBody(mediaType()))
@@ -288,10 +290,10 @@ class Main : Runnable {
           formatter = object : SimpleFormatter() {
             override fun format(record: LogRecord): String {
               val parameters = record.parameters
-              if (parameters != null) {
-                return format("%s%n%s%n", record.message, record.parameters.first())
+              return if (parameters != null) {
+                format("%s%n%s%n", record.message, parameters.first())
               } else {
-                return format("%s%n", record.message)
+                format("%s%n", record.message)
               }
             }
           }

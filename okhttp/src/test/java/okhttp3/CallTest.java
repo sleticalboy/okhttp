@@ -15,7 +15,6 @@
  */
 package okhttp3;
 
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -54,6 +53,12 @@ import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLProtocolException;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
+import mockwebserver3.Dispatcher;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
+import mockwebserver3.QueueDispatcher;
+import mockwebserver3.RecordedRequest;
+import mockwebserver3.SocketPolicy;
 import okhttp3.CallEvent.CallEnd;
 import okhttp3.CallEvent.ConnectStart;
 import okhttp3.CallEvent.ConnectionAcquired;
@@ -63,13 +68,7 @@ import okhttp3.internal.DoubleInetAddressDns;
 import okhttp3.internal.RecordingOkAuthenticator;
 import okhttp3.internal.Util;
 import okhttp3.internal.http.RecordingProxySelector;
-import okhttp3.internal.io.InMemoryFileSystem;
-import okhttp3.mockwebserver.Dispatcher;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.QueueDispatcher;
-import okhttp3.mockwebserver.RecordedRequest;
-import okhttp3.mockwebserver.SocketPolicy;
+import okhttp3.okio.LoggingFilesystem;
 import okhttp3.testing.Flaky;
 import okhttp3.testing.PlatformRule;
 import okhttp3.tls.HandshakeCertificates;
@@ -80,14 +79,15 @@ import okio.BufferedSource;
 import okio.ForwardingSource;
 import okio.GzipSink;
 import okio.Okio;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Ignore;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TestRule;
-import org.junit.rules.Timeout;
-
+import okio.Path;
+import okio.fakefilesystem.FakeFileSystem;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import static java.net.CookiePolicy.ACCEPT_ORIGINAL_SERVER;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
@@ -98,34 +98,40 @@ import static okhttp3.internal.Util.userAgent;
 import static okhttp3.tls.internal.TlsUtil.localhost;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.data.Offset.offset;
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.fail;
-import static org.junit.Assume.assumeFalse;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
+@Timeout(30)
 public final class CallTest {
-  @Rule public final PlatformRule platform = new PlatformRule();
-  @Rule public final TestRule timeout = new Timeout(30_000, TimeUnit.MILLISECONDS);
-  @Rule public final MockWebServer server = new MockWebServer();
-  @Rule public final MockWebServer server2 = new MockWebServer();
-  @Rule public final InMemoryFileSystem fileSystem = new InMemoryFileSystem();
-  @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
-  @Rule public final TestLogHandler testLogHandler = new TestLogHandler(OkHttpClient.class);
+  @RegisterExtension final PlatformRule platform = new PlatformRule();
+  final FakeFileSystem fileSystem = new FakeFileSystem();
+  @RegisterExtension final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
+  @RegisterExtension final TestLogHandler testLogHandler = new TestLogHandler(OkHttpClient.class);
 
+  private final MockWebServer server;
+  private final MockWebServer server2;
   private RecordingEventListener listener = new RecordingEventListener();
-  private HandshakeCertificates handshakeCertificates = localhost();
+  private final HandshakeCertificates handshakeCertificates = localhost();
   private OkHttpClient client = clientTestRule.newClientBuilder()
       .eventListenerFactory(clientTestRule.wrap(listener))
       .build();
-  private RecordingCallback callback = new RecordingCallback();
-  private Cache cache = new Cache(new File("/cache/"), Integer.MAX_VALUE, fileSystem);
+  private final RecordingCallback callback = new RecordingCallback();
+  private final Cache cache = new Cache(Path.get("/cache"), Integer.MAX_VALUE, new LoggingFilesystem(fileSystem));
 
-  @Before public void setUp() {
+  public CallTest(MockWebServer server, MockWebServer server2) {
+    this.server = server;
+    this.server2 = server2;
+  }
+
+  @BeforeEach public void setUp() {
     platform.assumeNotOpenJSSE();
     platform.assumeNotBouncyCastle();
   }
 
-  @After public void tearDown() throws Exception {
-    cache.delete();
+  @AfterEach public void tearDown() throws Exception {
+    cache.close();
+    fileSystem.checkNoOpenFiles();
   }
 
   @Test public void get() throws Exception {
@@ -974,14 +980,12 @@ public final class CallTest {
     server.enqueue(new MockResponse());
 
     client = client.newBuilder()
-        .addInterceptor(new Interceptor() {
-          @Override public Response intercept(Chain chain) throws IOException {
-            try {
-              chain.proceed(chain.request());
-              throw new AssertionError();
-            } catch (IOException expected) {
-              return chain.proceed(chain.request());
-            }
+        .addInterceptor(chain -> {
+          try {
+            chain.proceed(chain.request());
+            throw new AssertionError();
+          } catch (IOException expected) {
+            return chain.proceed(chain.request());
           }
         })
         .build();
@@ -1000,17 +1004,15 @@ public final class CallTest {
         .setBody("abc"));
 
     client = clientTestRule.newClientBuilder()
-        .addInterceptor(new Interceptor() {
-          @Override public Response intercept(Chain chain) throws IOException {
-            Response response = chain.proceed(chain.request());
-            try {
-              chain.proceed(chain.request());
-              fail();
-            } catch (IllegalStateException expected) {
-              assertThat(expected).hasMessageContaining("please call response.close()");
-            }
-            return response;
+        .addInterceptor(chain -> {
+          Response response = chain.proceed(chain.request());
+          try {
+            chain.proceed(chain.request());
+            fail();
+          } catch (IllegalStateException expected) {
+            assertThat(expected).hasMessageContaining("please call response.close()");
           }
+          return response;
         })
         .build();
 
@@ -2212,6 +2214,7 @@ public final class CallTest {
     assertThat(server.takeRequest().getSequenceNumber()).isEqualTo(2);
   }
 
+  @Tag("Slow")
   @Test public void follow20Redirects() throws Exception {
     for (int i = 0; i < 20; i++) {
       server.enqueue(new MockResponse()
@@ -2226,6 +2229,7 @@ public final class CallTest {
         .assertBody("Success!");
   }
 
+  @Tag("Slow")
   @Test public void follow20Redirects_Async() throws Exception {
     for (int i = 0; i < 20; i++) {
       server.enqueue(new MockResponse()
@@ -2242,6 +2246,7 @@ public final class CallTest {
         .assertBody("Success!");
   }
 
+  @Tag("Slow")
   @Test public void doesNotFollow21Redirects() throws Exception {
     for (int i = 0; i < 21; i++) {
       server.enqueue(new MockResponse()
@@ -2258,6 +2263,7 @@ public final class CallTest {
     }
   }
 
+  @Tag("Slow")
   @Test public void doesNotFollow21Redirects_Async() throws Exception {
     for (int i = 0; i < 21; i++) {
       server.enqueue(new MockResponse()
@@ -2320,10 +2326,12 @@ public final class CallTest {
     assertThat(server.getRequestCount()).isEqualTo(0);
   }
 
+  @Tag("Slowish")
   @Test public void cancelDuringHttpConnect() throws Exception {
     cancelDuringConnect("http");
   }
 
+  @Tag("Slowish")
   @Test public void cancelDuringHttpsConnect() throws Exception {
     cancelDuringConnect("https");
   }
@@ -2765,6 +2773,7 @@ public final class CallTest {
     expect100ContinueEmptyRequestBody();
   }
 
+  @Tag("Slowish")
   @Test public void expect100ContinueTimesOutWithoutContinue() throws Exception {
     server.enqueue(new MockResponse()
         .setSocketPolicy(SocketPolicy.NO_RESPONSE));
@@ -2790,6 +2799,7 @@ public final class CallTest {
     assertThat(recordedRequest.getBody().readUtf8()).isEqualTo("");
   }
 
+  @Tag("Slowish")
   @Test public void expect100ContinueTimesOutWithoutContinue_HTTP2() throws Exception {
     enableProtocol(Protocol.HTTP_2);
     expect100ContinueTimesOutWithoutContinue();
@@ -2817,6 +2827,7 @@ public final class CallTest {
     serverRespondsWithUnsolicited100Continue();
   }
 
+  @Tag("Slow")
   @Test public void serverRespondsWith100ContinueOnly() throws Exception {
     client = client.newBuilder()
         .readTimeout(Duration.ofSeconds(1))
@@ -2841,6 +2852,7 @@ public final class CallTest {
     assertThat(recordedRequest.getBody().readUtf8()).isEqualTo("abc");
   }
 
+  @Tag("Slow")
   @Test public void serverRespondsWith100ContinueOnly_HTTP2() throws Exception {
     enableProtocol(Protocol.HTTP_2);
     serverRespondsWith100ContinueOnly();
@@ -2864,11 +2876,13 @@ public final class CallTest {
     assertThat(server.takeRequest().getSequenceNumber()).isEqualTo(1);
   }
 
+  @Tag("Slow")
   @Test public void successfulExpectContinuePermitsConnectionReuseWithHttp2() throws Exception {
     enableProtocol(Protocol.HTTP_2);
     successfulExpectContinuePermitsConnectionReuse();
   }
 
+  @Tag("Slow")
   @Test public void unsuccessfulExpectContinuePreventsConnectionReuse() throws Exception {
     server.enqueue(new MockResponse());
     server.enqueue(new MockResponse());
@@ -2989,11 +3003,12 @@ public final class CallTest {
       assertThat(response.body().string()).isNotBlank();
     }
 
-    long connectCount = listener.getEventSequence().stream()
-        .filter((event) -> event instanceof ConnectStart)
-        .count();
-    long expected = platform.isJdk8() ? 2 : 1;
-    assertThat(connectCount).isEqualTo(expected);
+    if (!platform.isJdk8()) {
+      long connectCount = listener.getEventSequence().stream()
+              .filter((event) -> event instanceof ConnectStart)
+              .count();
+      assertThat(connectCount).isEqualTo(1);
+    }
   }
 
   /** Test which headers are sent unencrypted to the HTTP proxy. */
@@ -3327,7 +3342,7 @@ public final class CallTest {
   }
 
   /** https://github.com/square/okhttp/issues/4915 */
-  @Test @Ignore public void proxyDisconnectsAfterRequest() throws Exception {
+  @Test @Disabled public void proxyDisconnectsAfterRequest() throws Exception {
     server.useHttps(handshakeCertificates.sslSocketFactory(), true);
     server.enqueue(new MockResponse()
         .setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST));
@@ -3471,7 +3486,7 @@ public final class CallTest {
     assertThat(server.takeRequest().getBody().readUtf8()).isEqualTo("abc");
   }
 
-  @Ignore // This may fail in DNS lookup, which we don't have timeouts for.
+  @Disabled // This may fail in DNS lookup, which we don't have timeouts for.
   @Test public void invalidHost() throws Exception {
     Request request = new Request.Builder()
         .url(HttpUrl.get("http://1234.1.1.1/"))
@@ -3601,6 +3616,7 @@ public final class CallTest {
         + " Did you forget to close a response body?");
   }
 
+  @Tag("Slowish")
   @Test public void asyncLeakedResponseBodyLogsStackTrace() throws Exception {
     server.enqueue(new MockResponse()
         .setBody("This gets leaked."));
@@ -4004,7 +4020,7 @@ public final class CallTest {
 
   private static class RecordingSSLSocketFactory extends DelegatingSSLSocketFactory {
 
-    private List<SSLSocket> socketsCreated = new ArrayList<>();
+    private final List<SSLSocket> socketsCreated = new ArrayList<>();
 
     public RecordingSSLSocketFactory(SSLSocketFactory delegate) {
       super(delegate);

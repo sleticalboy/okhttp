@@ -15,39 +15,37 @@
  */
 package okhttp3;
 
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import okhttp3.tls.HeldCertificate;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import static java.util.Arrays.asList;
-import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static okhttp3.CertificatePinner.sha1Hash;
 import static okio.ByteString.decodeBase64;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public final class CertificatePinnerTest {
-  static HeldCertificate certA1 = new HeldCertificate.Builder()
+  static final HeldCertificate certA1 = new HeldCertificate.Builder()
       .serialNumber(100L)
       .build();
-  static String certA1Sha256Pin = CertificatePinner.pin(certA1.certificate());
+  static final String certA1Sha256Pin = CertificatePinner.pin(certA1.certificate());
 
-  static HeldCertificate certB1 = new HeldCertificate.Builder()
+  static final HeldCertificate certB1 = new HeldCertificate.Builder()
       .serialNumber(200L)
       .build();
-  static String certB1Sha256Pin = CertificatePinner.pin(certB1.certificate());
+  static final String certB1Sha256Pin = CertificatePinner.pin(certB1.certificate());
 
-  static HeldCertificate certC1 = new HeldCertificate.Builder()
+  static final HeldCertificate certC1 = new HeldCertificate.Builder()
       .serialNumber(300L)
       .build();
-  static String certC1Sha1Pin = "sha1/" + sha1Hash(certC1.certificate()).base64();
+  static final String certC1Sha1Pin = "sha1/" + sha1Hash(certC1.certificate()).base64();
 
   @Test public void malformedPin() throws Exception {
     CertificatePinner.Builder builder = new CertificatePinner.Builder();

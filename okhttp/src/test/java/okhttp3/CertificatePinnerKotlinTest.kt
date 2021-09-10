@@ -15,16 +15,15 @@
  */
 package okhttp3
 
-import okhttp3.CertificatePinner.Builder
 import okhttp3.CertificatePinner.Companion.sha1Hash
 import okhttp3.CertificatePinner.Pin
 import okhttp3.tls.HeldCertificate
 import okio.ByteString.Companion.decodeBase64
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
 
 class CertificatePinnerKotlinTest {
 
@@ -169,7 +168,7 @@ class CertificatePinnerKotlinTest {
   }
 
   @Test fun pinList() {
-    val builder = Builder()
+    val builder = CertificatePinner.Builder()
         .add("example.com", CertificatePinnerTest.certA1Sha256Pin)
         .add("www.example.com", CertificatePinnerTest.certA1Sha256Pin)
     val certificatePinner = builder.build()

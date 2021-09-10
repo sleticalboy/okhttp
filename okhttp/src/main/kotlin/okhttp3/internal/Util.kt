@@ -18,7 +18,7 @@
 package okhttp3.internal
 
 import java.io.Closeable
-import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.InetSocketAddress
@@ -38,34 +38,37 @@ import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 import kotlin.text.Charsets.UTF_32BE
 import kotlin.text.Charsets.UTF_32LE
-import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.Headers
 import okhttp3.Headers.Companion.headersOf
 import okhttp3.HttpUrl
 import okhttp3.OkHttp
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.internal.http2.Header
-import okhttp3.internal.io.FileSystem
 import okio.Buffer
 import okio.BufferedSink
 import okio.BufferedSource
 import okio.ByteString.Companion.decodeHex
+import okio.ExperimentalFileSystem
+import okio.FileSystem
 import okio.Options
+import okio.Path
 import okio.Source
 
 @JvmField
-val EMPTY_BYTE_ARRAY = ByteArray(0)
+val EMPTY_BYTE_ARRAY: ByteArray = ByteArray(0)
 @JvmField
-val EMPTY_HEADERS = headersOf()
+val EMPTY_HEADERS: Headers = headersOf()
 
 @JvmField
-val EMPTY_RESPONSE = EMPTY_BYTE_ARRAY.toResponseBody()
+val EMPTY_RESPONSE: ResponseBody = EMPTY_BYTE_ARRAY.toResponseBody()
 @JvmField
-val EMPTY_REQUEST = EMPTY_BYTE_ARRAY.toRequestBody()
+val EMPTY_REQUEST: RequestBody = EMPTY_BYTE_ARRAY.toRequestBody()
 
 /** Byte order marks. */
 private val UNICODE_BOMS = Options.of(
@@ -78,7 +81,7 @@ private val UNICODE_BOMS = Options.of(
 
 /** GMT and UTC are equivalent for our purposes. */
 @JvmField
-val UTC = TimeZone.getTimeZone("GMT")!!
+val UTC: TimeZone = TimeZone.getTimeZone("GMT")!!
 
 /**
  * Quick and dirty pattern to differentiate IP addresses from hostnames. This is an approximation
@@ -246,6 +249,14 @@ fun String.indexOfControlOrNonAscii(): Int {
 /** Returns true if this string is not a host name and might be an IP address. */
 fun String.canParseAsIpAddress(): Boolean {
   return VERIFY_AS_IP_ADDRESS.matches(this)
+}
+
+/** Returns true if we should void putting this this header in an exception or toString(). */
+fun isSensitiveHeader(name: String): Boolean {
+  return name.equals("Authorization", ignoreCase = true) ||
+      name.equals("Cookie", ignoreCase = true) ||
+      name.equals("Proxy-Authorization", ignoreCase = true) ||
+      name.equals("Set-Cookie", ignoreCase = true)
 }
 
 /** Returns a [Locale.US] formatted [String]. */
@@ -422,7 +433,7 @@ fun Buffer.skipAll(b: Byte): Int {
  * Returns the index of the next non-whitespace character in this. Result is undefined if input
  * contains newline characters.
  */
-fun String.indexOfNonWhitespace(startIndex: Int = 0): Int {
+internal fun String.indexOfNonWhitespace(startIndex: Int = 0): Int {
   for (i in startIndex until length) {
     val c = this[i]
     if (c != ' ' && c != '\t') {
@@ -433,7 +444,7 @@ fun String.indexOfNonWhitespace(startIndex: Int = 0): Int {
 }
 
 /** Returns the Content-Length as reported by the response headers. */
-fun Response.headersContentLength(): Long {
+internal fun Response.headersContentLength(): Long {
   return headers["Content-Length"]?.toLongOrDefault(-1L) ?: -1L
 }
 
@@ -449,7 +460,7 @@ fun String.toLongOrDefault(defaultValue: Long): Long {
  * Returns this as a non-negative integer, or 0 if it is negative, or [Int.MAX_VALUE] if it is too
  * large, or [defaultValue] if it cannot be parsed.
  */
-fun String?.toNonNegativeInt(defaultValue: Int): Int {
+internal fun String?.toNonNegativeInt(defaultValue: Int): Int {
   try {
     val value = this?.toLong() ?: return defaultValue
     return when {
@@ -499,6 +510,11 @@ fun Socket.closeQuietly() {
   } catch (e: AssertionError) {
     throw e
   } catch (rethrown: RuntimeException) {
+    if (rethrown.message == "bio == null") {
+      // Conscrypt in Android 10 and 11 may throw closing an SSLSocket. This is safe to ignore.
+      // https://issuetracker.google.com/issues/177450597
+      return
+    }
     throw rethrown
   } catch (_: Exception) {
   }
@@ -525,7 +541,8 @@ fun ServerSocket.closeQuietly() {
  *
  * @param file a file in the directory to check. This file shouldn't already exist!
  */
-fun FileSystem.isCivilized(file: File): Boolean {
+@OptIn(ExperimentalFileSystem::class)
+fun FileSystem.isCivilized(file: Path): Boolean {
   sink(file).use {
     try {
       delete(file)
@@ -537,18 +554,57 @@ fun FileSystem.isCivilized(file: File): Boolean {
   return false
 }
 
-fun Long.toHexString(): String = java.lang.Long.toHexString(this)
+/** Delete file we expect but don't require to exist. */
+@OptIn(ExperimentalFileSystem::class)
+fun FileSystem.deleteIfExists(path: Path) {
+  try {
+    delete(path)
+  } catch (fnfe: FileNotFoundException) {
+    return
+  }
+}
 
-fun Int.toHexString(): String = Integer.toHexString(this)
+/**
+ * Tolerant delete, try to clear as many files as possible even after a failure.
+ */
+@OptIn(ExperimentalFileSystem::class)
+fun FileSystem.deleteContents(directory: Path) {
+  var exception: IOException? = null
+  val files = try {
+    list(directory)
+  } catch (fnfe: FileNotFoundException) {
+    return
+  }
+  for (file in files) {
+    try {
+      if (metadata(file).isDirectory) {
+        deleteContents(file)
+      }
+
+      delete(file)
+    } catch (ioe: IOException) {
+      if (exception == null) {
+        exception = ioe
+      }
+    }
+  }
+  if (exception != null) {
+    throw exception
+  }
+}
+
+internal fun Long.toHexString(): String = java.lang.Long.toHexString(this)
+
+internal fun Int.toHexString(): String = Integer.toHexString(this)
 
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN", "NOTHING_TO_INLINE")
-inline fun Any.wait() = (this as Object).wait()
+internal inline fun Any.wait() = (this as Object).wait()
 
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN", "NOTHING_TO_INLINE")
-inline fun Any.notify() = (this as Object).notify()
+internal inline fun Any.notify() = (this as Object).notify()
 
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN", "NOTHING_TO_INLINE")
-inline fun Any.notifyAll() = (this as Object).notifyAll()
+internal inline fun Any.notifyAll() = (this as Object).notifyAll()
 
 fun <T> readFieldOrNull(instance: Any, fieldType: Class<T>, fieldName: String): T? {
   var c: Class<*> = instance.javaClass
@@ -579,7 +635,7 @@ internal fun <E> MutableList<E>.addIfAbsent(element: E) {
 }
 
 @JvmField
-internal val assertionsEnabled = OkHttpClient::class.java.desiredAssertionStatus()
+val assertionsEnabled: Boolean = OkHttpClient::class.java.desiredAssertionStatus()
 
 /**
  * Returns the string "OkHttp" unless the library has been shaded for inclusion in another library,
@@ -588,7 +644,7 @@ internal val assertionsEnabled = OkHttpClient::class.java.desiredAssertionStatus
  * instances; this makes it clear which is which.
  */
 @JvmField
-internal val okHttpName =
+internal val okHttpName: String =
     OkHttpClient::class.java.name.removePrefix("okhttp3.").removeSuffix("Client")
 
 @Suppress("NOTHING_TO_INLINE")
@@ -605,15 +661,11 @@ internal inline fun Any.assertThreadDoesntHoldLock() {
   }
 }
 
-fun Exception.withSuppressed(suppressed: List<Exception>): Throwable = apply {
-  if (suppressed.size > 1) {
-    println(suppressed)
-  }
-
+internal fun Exception.withSuppressed(suppressed: List<Exception>): Throwable = apply {
   for (e in suppressed) addSuppressed(e)
 }
 
-inline fun <T> Iterable<T>.filterList(predicate: T.() -> Boolean): List<T> {
+internal inline fun <T> Iterable<T>.filterList(predicate: T.() -> Boolean): List<T> {
   var result: List<T> = emptyList()
   for (i in this) {
     if (predicate(i)) {
@@ -624,4 +676,4 @@ inline fun <T> Iterable<T>.filterList(predicate: T.() -> Boolean): List<T> {
   return result
 }
 
-const val userAgent = "okhttp/${OkHttp.VERSION}"
+const val userAgent: String = "okhttp/${OkHttp.VERSION}"

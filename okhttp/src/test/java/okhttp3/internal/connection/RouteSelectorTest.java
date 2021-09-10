@@ -41,22 +41,23 @@ import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Route;
 import okhttp3.internal.http.RecordingProxySelector;
+import okhttp3.internal.platform.Platform;
 import okhttp3.testing.PlatformRule;
 import okhttp3.testing.PlatformVersion;
 import okhttp3.tls.HandshakeCertificates;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import static java.net.Proxy.NO_PROXY;
 import static okhttp3.internal.Util.immutableListOf;
 import static okhttp3.tls.internal.TlsUtil.localhost;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public final class RouteSelectorTest {
-  @Rule public final PlatformRule platform = new PlatformRule();
-  @Rule public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
+  @RegisterExtension public final PlatformRule platform = new PlatformRule();
+  @RegisterExtension public final OkHttpClientTestRule clientTestRule = new OkHttpClientTestRule();
 
   public final List<ConnectionSpec> connectionSpecs = immutableListOf(
       ConnectionSpec.MODERN_TLS,
@@ -71,8 +72,8 @@ public final class RouteSelectorTest {
   private static final String proxyBHost = "proxyb";
   private static final Proxy proxyB =
       new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved(proxyBHost, proxyBPort));
-  private String uriHost = "hosta";
-  private int uriPort = 1003;
+  private final String uriHost = "hosta";
+  private final int uriPort = 1003;
 
   private Call call;
   private SocketFactory socketFactory;
@@ -84,9 +85,9 @@ public final class RouteSelectorTest {
   private final List<Protocol> protocols = Arrays.asList(Protocol.HTTP_1_1);
   private final FakeDns dns = new FakeDns();
   private final RecordingProxySelector proxySelector = new RecordingProxySelector();
-  private RouteDatabase routeDatabase = new RouteDatabase();
+  private final RouteDatabase routeDatabase = new RouteDatabase();
 
-  @Before public void setUp() throws Exception {
+  @BeforeEach public void setUp() throws Exception {
     call = clientTestRule.newClient().newCall(new Request.Builder()
         .url("https://" + uriHost + ":" + uriPort + "/")
         .build());
@@ -107,7 +108,7 @@ public final class RouteSelectorTest {
     assertThat(selection.hasNext()).isFalse();
     try {
       selection.next();
-      fail();
+      fail("");
     } catch (NoSuchElementException expected) {
     }
 
@@ -470,10 +471,13 @@ public final class RouteSelectorTest {
   @Test public void routeToString() throws Exception {
     Route route = new Route(httpAddress(), Proxy.NO_PROXY,
         InetSocketAddress.createUnresolved("host", 1234));
-    assertThat(route.toString()).isEqualTo(
-        PlatformVersion.INSTANCE.getMajorVersion() >= 14
-            ? "Route{host/<unresolved>:1234}"
-            : "Route{host:1234}");
+    String expected;
+    if (Platform.Companion.isAndroid() || PlatformVersion.INSTANCE.getMajorVersion() < 14) {
+      expected = "Route{host:1234}";
+    } else {
+      expected = "Route{host/<unresolved>:1234}";
+    }
+    assertThat(route.toString()).isEqualTo(expected);
   }
 
   private void assertRoute(Route route, Address address, Proxy proxy, InetAddress socketAddress,

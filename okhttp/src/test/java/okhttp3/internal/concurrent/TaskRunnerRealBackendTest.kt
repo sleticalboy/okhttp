@@ -21,8 +21,9 @@ import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.data.Offset
-import org.junit.After
-import org.junit.Test
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
 
 /**
  * Integration test to confirm that [TaskRunner] works with a real backend. Business logic is all
@@ -31,6 +32,7 @@ import org.junit.Test
  * This test is doing real sleeping with tolerances of 250 ms. Hopefully that's enough for even the
  * busiest of CI servers.
  */
+@Tag("Slowish")
 class TaskRunnerRealBackendTest {
   private val log = LinkedBlockingDeque<String>()
 
@@ -49,7 +51,7 @@ class TaskRunnerRealBackendTest {
   private val taskRunner = TaskRunner(backend)
   private val queue = taskRunner.newQueue()
 
-  @After fun tearDown() {
+  @AfterEach fun tearDown() {
     backend.shutdown()
   }
 

@@ -16,7 +16,6 @@
 package okhttp3.internal.http2;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -36,37 +35,22 @@ public class HpackDecodeTestBase {
   /**
    * Reads all stories in the folders provided, asserts if no story found.
    */
-  protected static Collection<Story[]> createStories(String[] interopTests)
+  protected static List<Object> createStories(String[] interopTests)
       throws Exception {
     if (interopTests.length == 0) {
-      return Collections.singletonList(new Story[] {MISSING});
+      return Collections.singletonList(MISSING);
     }
 
-    List<Story[]> result = new ArrayList<>();
+    List<Object> result = new ArrayList<>();
     for (String interopTestName : interopTests) {
       List<Story> stories = HpackJsonUtil.readStories(interopTestName);
-      for (Story story : stories) {
-        result.add(new Story[] {story});
-      }
+      result.addAll(stories);
     }
     return result;
   }
 
   private final Buffer bytesIn = new Buffer();
   private final Hpack.Reader hpackReader = new Hpack.Reader(bytesIn, 4096);
-
-  private final Story story;
-
-  public HpackDecodeTestBase(Story story) {
-    this.story = story;
-  }
-
-  /**
-   * Expects wire to be set for all cases, and compares the decoder's output to expected headers.
-   */
-  protected void testDecoder() throws Exception {
-    testDecoder(story);
-  }
 
   protected void testDecoder(Story story) throws Exception {
     for (Case testCase : story.getCases()) {
@@ -87,9 +71,5 @@ public class HpackDecodeTestBase {
       String message, List<Header> expected, List<Header> observed) {
     assertThat(new LinkedHashSet<>(observed)).overridingErrorMessage(message).isEqualTo(
         new LinkedHashSet<>(expected));
-  }
-
-  protected Story getStory() {
-    return story;
   }
 }
