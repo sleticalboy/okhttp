@@ -15,6 +15,8 @@
  */
 package okhttp3
 
+import kotlin.time.DurationUnit
+
 /**
  * A Cache-Control header with cache directives from a server or client. These directives set policy
  * on what responses can be stored, and which requests can be satisfied by those stored responses.
@@ -118,7 +120,7 @@ expect class CacheControl internal constructor(
      * @param maxAge a non-negative integer. This is stored and transmitted with [TimeUnit.SECONDS]
      *     precision; finer precision will be lost.
      */
-//    fun maxAge(maxAge: Int, timeUnit: TimeUnit): Builder
+    fun maxAge(maxAge: Int, timeUnit: DurationUnit): Builder
 
     /**
      * Accept cached responses that have exceeded their freshness lifetime by up to `maxStale`. If
@@ -127,7 +129,7 @@ expect class CacheControl internal constructor(
      * @param maxStale a non-negative integer. This is stored and transmitted with
      *     [TimeUnit.SECONDS] precision; finer precision will be lost.
      */
-//    fun maxStale(maxStale: Int, timeUnit: TimeUnit): Builder
+    fun maxStale(maxStale: Int, timeUnit: DurationUnit): Builder
 
     /**
      * Sets the minimum number of seconds that a response will continue to be fresh for. If the
@@ -137,7 +139,7 @@ expect class CacheControl internal constructor(
      * @param minFresh a non-negative integer. This is stored and transmitted with
      *     [TimeUnit.SECONDS] precision; finer precision will be lost.
      */
-//    fun minFresh(minFresh: Int, timeUnit: TimeUnit): Builder
+    fun minFresh(minFresh: Int, timeUnit: DurationUnit): Builder
 
     /**
      * Only accept the response if it is in the cache. If the response isn't cached, a `504
@@ -165,12 +167,12 @@ expect class CacheControl internal constructor(
      * stale. If the response isn't available in the cache or requires server validation, the call
      * will fail with a `504 Unsatisfiable Request`.
      */
-//    val FORCE_CACHE: CacheControl
+   val FORCE_CACHE: CacheControl
 
     /**
      * Returns the cache directives of [headers]. This honors both Cache-Control and Pragma headers
      * if they are present.
      */
-//    fun parse(headers: Headers): CacheControl
+   fun parse(headers: Headers): CacheControl
   }
 }

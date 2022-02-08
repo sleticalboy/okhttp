@@ -83,6 +83,7 @@ import okio.source
  *     connection's state must be guarded by holding a lock on the connection.
  */
 class RealConnection(
+  val taskRunner: TaskRunner,
   val connectionPool: RealConnectionPool,
   private val route: Route
 ) : Http2Connection.Listener(), Connection {
@@ -149,6 +150,10 @@ class RealConnection(
   internal val isMultiplexed: Boolean
     get() = http2Connection != null
 
+  /** True if we haven't yet called [connectAndEquip] on this. */
+  internal val isNew: Boolean
+    get() = protocol == null
+
   /** Prevent further exchanges from being created on this connection. */
   @Synchronized internal fun noNewExchanges() {
     noNewExchanges = true
@@ -172,103 +177,181 @@ class RealConnection(
     call: Call,
     eventListener: EventListener
   ) {
-    check(protocol == null) { "already connected" }
+    check(isNew) { "already connected" }
 
-    var routeException: RouteException? = null
-    val connectionSpecs = route.address.connectionSpecs
-    val connectionSpecSelector = ConnectionSpecSelector(connectionSpecs)
-
-    if (route.address.sslSocketFactory == null) {
-      if (ConnectionSpec.CLEARTEXT !in connectionSpecs) {
-        throw RouteException(UnknownServiceException(
-            "CLEARTEXT communication not enabled for client"))
-      }
-      val host = route.address.url.host
-      if (!Platform.get().isCleartextTrafficPermitted(host)) {
-        throw RouteException(UnknownServiceException(
-            "CLEARTEXT communication to $host not permitted by network security policy"))
-      }
-    } else {
-      if (Protocol.H2_PRIOR_KNOWLEDGE in route.address.protocols) {
-        throw RouteException(UnknownServiceException(
-            "H2_PRIOR_KNOWLEDGE cannot be used with HTTPS"))
-      }
-    }
-
+    var equipPlan = firstEquipPlan()
+    var firstException: IOException? = null
     while (true) {
-      try {
-        if (route.requiresTunnel()) {
-          connectTunnel(connectTimeout, readTimeout, writeTimeout, call, eventListener)
-          if (rawSocket == null) {
-            // We were unable to connect the tunnel but properly closed down our resources.
-            break
-          }
+      val (failure, nextPlan) = connectAndEquip(
+        connectTimeout = connectTimeout,
+        readTimeout = readTimeout,
+        writeTimeout = writeTimeout,
+        pingIntervalMillis = pingIntervalMillis,
+        connectionRetryEnabled = connectionRetryEnabled,
+        call = call,
+        eventListener = eventListener,
+        equipPlan = equipPlan
+      )
+
+      if (failure != null) {
+        // Accumulate failures.
+        if (firstException == null) {
+          firstException = failure
         } else {
-          connectSocket(connectTimeout, readTimeout, call, eventListener)
-        }
-        establishProtocol(connectionSpecSelector, pingIntervalMillis, call, eventListener)
-        eventListener.connectEnd(call, route.socketAddress, route.proxy, protocol)
-        break
-      } catch (e: IOException) {
-        socket?.closeQuietly()
-        rawSocket?.closeQuietly()
-        socket = null
-        rawSocket = null
-        source = null
-        sink = null
-        handshake = null
-        protocol = null
-        http2Connection = null
-        allocationLimit = 1
-
-        eventListener.connectFailed(call, route.socketAddress, route.proxy, null, e)
-
-        if (routeException == null) {
-          routeException = RouteException(e)
-        } else {
-          routeException.addConnectException(e)
+          firstException.addSuppressed(failure)
         }
 
-        if (!connectionRetryEnabled || !connectionSpecSelector.connectionFailed(e)) {
-          throw routeException
-        }
+        if (nextPlan == null) throw firstException // Nothing left to try.
+      } else {
+        if (nextPlan == null) break // Success.
       }
-    }
 
-    if (route.requiresTunnel() && rawSocket == null) {
-      throw RouteException(ProtocolException(
-          "Too many tunnel connections attempted: $MAX_TUNNEL_ATTEMPTS"))
+      equipPlan = nextPlan
     }
 
     idleAtNs = System.nanoTime()
   }
 
   /**
-   * Does all the work to build an HTTPS connection over a proxy tunnel. The catch here is that a
-   * proxy server can issue an auth challenge and then close the connection.
+   * Returns the initial plan for equipping a socket so it can carry HTTP. This doesn't include
+   * HTTPS connection spec information because that needs a [SSLSocket] and we don't have that
+   * yet.
+   *
+   * This throws if no plan is possible.
    */
   @Throws(IOException::class)
-  private fun connectTunnel(
+  private fun firstEquipPlan(): EquipPlan {
+    if (route.address.sslSocketFactory == null) {
+      if (ConnectionSpec.CLEARTEXT !in route.address.connectionSpecs) {
+        throw UnknownServiceException("CLEARTEXT communication not enabled for client")
+      }
+
+      val host = route.address.url.host
+      if (!Platform.get().isCleartextTrafficPermitted(host)) {
+        throw UnknownServiceException(
+          "CLEARTEXT communication to $host not permitted by network security policy"
+        )
+      }
+    } else {
+      if (Protocol.H2_PRIOR_KNOWLEDGE in route.address.protocols) {
+        throw UnknownServiceException("H2_PRIOR_KNOWLEDGE cannot be used with HTTPS")
+      }
+    }
+
+    val tunnelRequest = when {
+      route.requiresTunnel() -> createTunnelRequest()
+      else -> null
+    }
+
+    return EquipPlan(
+      tunnelRequest = tunnelRequest,
+    )
+  }
+
+  internal data class ConnectAndEquipResult(
+    val failure: IOException? = null,
+    val nextPlan: EquipPlan? = null,
+  )
+
+  /**
+   * This returns a failure exception and also what to do about it.
+   *
+   * If the returned plan is not-null, another attempt should be made by following it. If the
+   * returned exception is non-null, it should be reported to the user should all further attempts
+   * fail.
+   *
+   * The two values are independent: results can contain both (recoverable error), neither
+   * (success), just an exception (permanent failure), or just a plan (non-exceptional retry).
+   */
+  @Throws(IOException::class)
+  private fun connectAndEquip(
     connectTimeout: Int,
     readTimeout: Int,
     writeTimeout: Int,
+    pingIntervalMillis: Int,
+    connectionRetryEnabled: Boolean,
     call: Call,
-    eventListener: EventListener
-  ) {
-    var tunnelRequest: Request = createTunnelRequest()
-    val url = tunnelRequest.url
-    for (i in 0 until MAX_TUNNEL_ATTEMPTS) {
-      connectSocket(connectTimeout, readTimeout, call, eventListener)
-      tunnelRequest = createTunnel(readTimeout, writeTimeout, tunnelRequest, url)
-          ?: break // Tunnel successfully created.
+    eventListener: EventListener,
+    equipPlan: EquipPlan,
+  ): ConnectAndEquipResult {
+    val connectionSpecs = route.address.connectionSpecs
+    var nextTlsEquipPlan: EquipPlan? = null
 
-      // The proxy decided to close the connection after an auth challenge. We need to create a new
-      // connection, but this time with the auth credentials.
+    try {
+      eventListener.connectStart(call, route.socketAddress, route.proxy)
+      connectSocket(connectTimeout, readTimeout)
+
+      if (equipPlan.tunnelRequest != null) {
+        val tunnelResult = connectTunnel(
+          readTimeout = readTimeout,
+          writeTimeout = writeTimeout,
+          call = call,
+          equipPlan = equipPlan,
+          eventListener = eventListener
+        )
+
+        // Tunnel didn't work. Start it all again.
+        if (tunnelResult.nextPlan != null || tunnelResult.failure != null) {
+          return tunnelResult
+        }
+      }
+
+      if (route.address.sslSocketFactory != null) {
+        eventListener.secureConnectStart(call)
+
+        // Create the wrapper over the connected socket.
+        val sslSocket = route.address.sslSocketFactory.createSocket(
+          rawSocket,
+          route.address.url.host,
+          route.address.url.port,
+          true /* autoClose */
+        ) as SSLSocket
+
+        val tlsEquipPlan = equipPlan.withCurrentOrInitialConnectionSpec(connectionSpecs, sslSocket)
+        val connectionSpec = connectionSpecs[tlsEquipPlan.connectionSpecIndex]
+
+        // Figure out the next connection spec in case we need a retry.
+        nextTlsEquipPlan = tlsEquipPlan.nextConnectionSpec(connectionSpecs, sslSocket)
+
+        connectionSpec.apply(sslSocket, isFallback = tlsEquipPlan.isTlsFallback)
+        connectTls(sslSocket, connectionSpec)
+        eventListener.secureConnectEnd(call, handshake)
+      } else {
+        socket = rawSocket
+        protocol = when {
+          Protocol.H2_PRIOR_KNOWLEDGE in route.address.protocols -> Protocol.H2_PRIOR_KNOWLEDGE
+          else -> Protocol.HTTP_1_1
+        }
+      }
+
+      if (protocol == Protocol.HTTP_2 || protocol == Protocol.H2_PRIOR_KNOWLEDGE) {
+        startHttp2(pingIntervalMillis)
+      }
+
+      eventListener.connectEnd(call, route.socketAddress, route.proxy, protocol)
+      return ConnectAndEquipResult() // Success.
+    } catch (e: IOException) {
+      socket?.closeQuietly()
       rawSocket?.closeQuietly()
+      socket = null
       rawSocket = null
-      sink = null
       source = null
-      eventListener.connectEnd(call, route.socketAddress, route.proxy, null)
+      sink = null
+      handshake = null
+      protocol = null
+      http2Connection = null
+      allocationLimit = 1
+
+      eventListener.connectFailed(call, route.socketAddress, route.proxy, null, e)
+
+      if (!connectionRetryEnabled || !retryTlsHandshake(e)) {
+        nextTlsEquipPlan = null
+      }
+
+      return ConnectAndEquipResult(
+        failure = e,
+        nextPlan = nextTlsEquipPlan
+      )
     }
   }
 
@@ -277,8 +360,6 @@ class RealConnection(
   private fun connectSocket(
     connectTimeout: Int,
     readTimeout: Int,
-    call: Call,
-    eventListener: EventListener
   ) {
     val proxy = route.proxy
     val address = route.address
@@ -289,7 +370,6 @@ class RealConnection(
     }
     this.rawSocket = rawSocket
 
-    eventListener.connectStart(call, route.socketAddress, proxy)
     rawSocket.soTimeout = readTimeout
     try {
       Platform.get().connectSocket(rawSocket, route.socketAddress, connectTimeout)
@@ -313,32 +393,53 @@ class RealConnection(
     }
   }
 
+  /**
+   * Does all the work to build an HTTPS connection over a proxy tunnel. The catch here is that a
+   * proxy server can issue an auth challenge and then close the connection.
+   *
+   * @return the next plan to attempt, or null if no further attempt should be made either because
+   *     we've successfully connected or because no further attempts should be made.
+   */
   @Throws(IOException::class)
-  private fun establishProtocol(
-    connectionSpecSelector: ConnectionSpecSelector,
-    pingIntervalMillis: Int,
+  internal fun connectTunnel(
+    readTimeout: Int,
+    writeTimeout: Int,
     call: Call,
-    eventListener: EventListener
-  ) {
-    if (route.address.sslSocketFactory == null) {
-      if (Protocol.H2_PRIOR_KNOWLEDGE in route.address.protocols) {
-        socket = rawSocket
-        protocol = Protocol.H2_PRIOR_KNOWLEDGE
-        startHttp2(pingIntervalMillis)
-        return
+    equipPlan: EquipPlan,
+    eventListener: EventListener,
+  ): ConnectAndEquipResult {
+    val nextTunnelRequest = createTunnel(
+      readTimeout = readTimeout,
+      writeTimeout = writeTimeout,
+      tunnelRequest = equipPlan.tunnelRequest!!,
+      url = route.address.url
+    ) ?: return ConnectAndEquipResult() // Success.
+
+    // The proxy decided to close the connection after an auth challenge. We need to create a new
+    // connection, but this time with the auth credentials.
+    rawSocket?.closeQuietly()
+    rawSocket = null
+    sink = null
+    source = null
+
+    val nextAttempt = equipPlan.attempt + 1
+    return when {
+      nextAttempt < MAX_TUNNEL_ATTEMPTS -> {
+        eventListener.connectEnd(call, route.socketAddress, route.proxy, null)
+        ConnectAndEquipResult(
+          nextPlan = equipPlan.copy(
+            attempt = nextAttempt,
+            tunnelRequest = nextTunnelRequest,
+          )
+        )
       }
-
-      socket = rawSocket
-      protocol = Protocol.HTTP_1_1
-      return
-    }
-
-    eventListener.secureConnectStart(call)
-    connectTls(connectionSpecSelector)
-    eventListener.secureConnectEnd(call, handshake)
-
-    if (protocol === Protocol.HTTP_2) {
-      startHttp2(pingIntervalMillis)
+      else -> {
+        val failure = ProtocolException(
+          "Too many tunnel connections attempted: $MAX_TUNNEL_ATTEMPTS"
+        )
+        eventListener.connectFailed(call, route.socketAddress, route.proxy, null, failure)
+        return ConnectAndEquipResult(failure = failure)
+      }
     }
   }
 
@@ -348,29 +449,21 @@ class RealConnection(
     val source = this.source!!
     val sink = this.sink!!
     socket.soTimeout = 0 // HTTP/2 connection timeouts are set per-stream.
-    val http2Connection = Http2Connection.Builder(client = true, taskRunner = TaskRunner.INSTANCE)
-        .socket(socket, route.address.url.host, source, sink)
-        .listener(this)
-        .pingIntervalMillis(pingIntervalMillis)
-        .build()
+    val http2Connection = Http2Connection.Builder(client = true, taskRunner)
+      .socket(socket, route.address.url.host, source, sink)
+      .listener(this)
+      .pingIntervalMillis(pingIntervalMillis)
+      .build()
     this.http2Connection = http2Connection
     this.allocationLimit = Http2Connection.DEFAULT_SETTINGS.getMaxConcurrentStreams()
     http2Connection.start()
   }
 
   @Throws(IOException::class)
-  private fun connectTls(connectionSpecSelector: ConnectionSpecSelector) {
+  private fun connectTls(sslSocket: SSLSocket, connectionSpec: ConnectionSpec) {
     val address = route.address
-    val sslSocketFactory = address.sslSocketFactory
     var success = false
-    var sslSocket: SSLSocket? = null
     try {
-      // Create the wrapper over the connected socket.
-      sslSocket = sslSocketFactory!!.createSocket(
-          rawSocket, address.url.host, address.url.port, true /* autoClose */) as SSLSocket
-
-      // Configure the socket's ciphers, TLS versions, and extensions.
-      val connectionSpec = connectionSpecSelector.configureSecureSocket(sslSocket)
       if (connectionSpec.supportsTlsExtensions) {
         Platform.get().configureTlsExtensions(sslSocket, address.url.host, address.protocols)
       }
@@ -386,24 +479,32 @@ class RealConnection(
         val peerCertificates = unverifiedHandshake.peerCertificates
         if (peerCertificates.isNotEmpty()) {
           val cert = peerCertificates[0] as X509Certificate
-          throw SSLPeerUnverifiedException("""
-              |Hostname ${address.url.host} not verified:
-              |    certificate: ${CertificatePinner.pin(cert)}
-              |    DN: ${cert.subjectDN.name}
-              |    subjectAltNames: ${OkHostnameVerifier.allSubjectAltNames(cert)}
-              """.trimMargin())
+          throw SSLPeerUnverifiedException(
+            """
+            |Hostname ${address.url.host} not verified:
+            |    certificate: ${CertificatePinner.pin(cert)}
+            |    DN: ${cert.subjectDN.name}
+            |    subjectAltNames: ${OkHostnameVerifier.allSubjectAltNames(cert)}
+            """.trimMargin()
+          )
         } else {
           throw SSLPeerUnverifiedException(
-              "Hostname ${address.url.host} not verified (no certificates)")
+            "Hostname ${address.url.host} not verified (no certificates)"
+          )
         }
       }
 
       val certificatePinner = address.certificatePinner!!
 
-      handshake = Handshake(unverifiedHandshake.tlsVersion, unverifiedHandshake.cipherSuite,
-          unverifiedHandshake.localCertificates) {
-        certificatePinner.certificateChainCleaner!!.clean(unverifiedHandshake.peerCertificates,
-            address.url.host)
+      handshake = Handshake(
+        unverifiedHandshake.tlsVersion,
+        unverifiedHandshake.cipherSuite,
+        unverifiedHandshake.localCertificates
+      ) {
+        certificatePinner.certificateChainCleaner!!.clean(
+          unverifiedHandshake.peerCertificates,
+          address.url.host
+        )
       }
 
       // Check that the certificate pinner is satisfied by the certificates presented.
@@ -423,11 +524,9 @@ class RealConnection(
       protocol = if (maybeProtocol != null) Protocol.get(maybeProtocol) else Protocol.HTTP_1_1
       success = true
     } finally {
-      if (sslSocket != null) {
-        Platform.get().afterHandshake(sslSocket)
-      }
+      Platform.get().afterHandshake(sslSocket)
       if (!success) {
-        sslSocket?.closeQuietly()
+        sslSocket.closeQuietly()
       }
     }
   }
@@ -455,8 +554,8 @@ class RealConnection(
       tunnelCodec.writeRequest(nextRequest.headers, requestLine)
       tunnelCodec.finishRequest()
       val response = tunnelCodec.readResponseHeaders(false)!!
-          .request(nextRequest)
-          .build()
+        .request(nextRequest)
+        .build()
       tunnelCodec.skipConnectBody(response)
 
       when (response.code) {
@@ -473,7 +572,7 @@ class RealConnection(
 
         HTTP_PROXY_AUTH -> {
           nextRequest = route.address.proxyAuthenticator.authenticate(route, response)
-              ?: throw IOException("Failed to authenticate with proxy")
+            ?: throw IOException("Failed to authenticate with proxy")
 
           if ("close".equals(response.header("Connection"), ignoreCase = true)) {
             return nextRequest
@@ -497,26 +596,26 @@ class RealConnection(
   @Throws(IOException::class)
   private fun createTunnelRequest(): Request {
     val proxyConnectRequest = Request.Builder()
-        .url(route.address.url)
-        .method("CONNECT", null)
-        .header("Host", route.address.url.toHostHeader(includeDefaultPort = true))
-        .header("Proxy-Connection", "Keep-Alive") // For HTTP/1.0 proxies like Squid.
-        .header("User-Agent", userAgent)
-        .build()
+      .url(route.address.url)
+      .method("CONNECT", null)
+      .header("Host", route.address.url.toHostHeader(includeDefaultPort = true))
+      .header("Proxy-Connection", "Keep-Alive") // For HTTP/1.0 proxies like Squid.
+      .header("User-Agent", userAgent)
+      .build()
 
     val fakeAuthChallengeResponse = Response.Builder()
-        .request(proxyConnectRequest)
-        .protocol(Protocol.HTTP_1_1)
-        .code(HTTP_PROXY_AUTH)
-        .message("Preemptive Authenticate")
-        .body(EMPTY_RESPONSE)
-        .sentRequestAtMillis(-1L)
-        .receivedResponseAtMillis(-1L)
-        .header("Proxy-Authenticate", "OkHttp-Preemptive")
-        .build()
+      .request(proxyConnectRequest)
+      .protocol(Protocol.HTTP_1_1)
+      .code(HTTP_PROXY_AUTH)
+      .message("Preemptive Authenticate")
+      .body(EMPTY_RESPONSE)
+      .sentRequestAtMillis(-1L)
+      .receivedResponseAtMillis(-1L)
+      .header("Proxy-Authenticate", "OkHttp-Preemptive")
+      .build()
 
     val authenticatedRequest = route.address.proxyAuthenticator
-        .authenticate(route, fakeAuthChallengeResponse)
+      .authenticate(route, fakeAuthChallengeResponse)
 
     return authenticatedRequest ?: proxyConnectRequest
   }
@@ -573,8 +672,8 @@ class RealConnection(
   private fun routeMatchesAny(candidates: List<Route>): Boolean {
     return candidates.any {
       it.proxy.type() == Proxy.Type.DIRECT &&
-          route.proxy.type() == Proxy.Type.DIRECT &&
-          route.socketAddress == it.socketAddress
+        route.proxy.type() == Proxy.Type.DIRECT &&
+        route.socketAddress == it.socketAddress
     }
   }
 
@@ -598,8 +697,8 @@ class RealConnection(
   private fun certificateSupportHost(url: HttpUrl, handshake: Handshake): Boolean {
     val peerCertificates = handshake.peerCertificates
 
-    return peerCertificates.isNotEmpty() && OkHostnameVerifier.verify(url.host,
-        peerCertificates[0] as X509Certificate)
+    return peerCertificates.isNotEmpty() &&
+      OkHostnameVerifier.verify(url.host, peerCertificates[0] as X509Certificate)
   }
 
   @Throws(SocketException::class)
@@ -653,7 +752,7 @@ class RealConnection(
     val socket = this.socket!!
     val source = this.source!!
     if (rawSocket.isClosed || socket.isClosed || socket.isInputShutdown ||
-            socket.isOutputShutdown) {
+      socket.isOutputShutdown) {
       return false
     }
 
@@ -689,7 +788,8 @@ class RealConnection(
     if (failedRoute.proxy.type() != Proxy.Type.DIRECT) {
       val address = failedRoute.address
       address.proxySelector.connectFailed(
-          address.url.toUri(), failedRoute.proxy.address(), failure)
+        address.url.toUri(), failedRoute.proxy.address(), failure
+      )
     }
 
     client.routeDatabase.failed(failedRoute)
@@ -738,10 +838,10 @@ class RealConnection(
 
   override fun toString(): String {
     return "Connection{${route.address.url.host}:${route.address.url.port}," +
-        " proxy=${route.proxy}" +
-        " hostAddress=${route.socketAddress}" +
-        " cipherSuite=${handshake?.cipherSuite ?: "none"}" +
-        " protocol=$protocol}"
+      " proxy=${route.proxy}" +
+      " hostAddress=${route.socketAddress}" +
+      " cipherSuite=${handshake?.cipherSuite ?: "none"}" +
+      " protocol=$protocol}"
   }
 
   companion object {
@@ -750,12 +850,13 @@ class RealConnection(
     const val IDLE_CONNECTION_HEALTHY_NS = 10_000_000_000 // 10 seconds.
 
     fun newTestConnection(
+      taskRunner: TaskRunner,
       connectionPool: RealConnectionPool,
       route: Route,
       socket: Socket,
       idleAtNs: Long
     ): RealConnection {
-      val result = RealConnection(connectionPool, route)
+      val result = RealConnection(taskRunner, connectionPool, route)
       result.socket = socket
       result.idleAtNs = idleAtNs
       return result

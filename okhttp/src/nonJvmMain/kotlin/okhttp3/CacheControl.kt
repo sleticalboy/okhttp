@@ -15,13 +15,19 @@
  */
 package okhttp3
 
+import kotlin.time.DurationUnit
 import okhttp3.internal.commonBuild
+import okhttp3.internal.commonForceCache
 import okhttp3.internal.commonForceNetwork
 import okhttp3.internal.commonImmutable
+import okhttp3.internal.commonMaxAge
+import okhttp3.internal.commonMaxStale
+import okhttp3.internal.commonMinFresh
 import okhttp3.internal.commonNoCache
 import okhttp3.internal.commonNoStore
 import okhttp3.internal.commonNoTransform
 import okhttp3.internal.commonOnlyIfCached
+import okhttp3.internal.commonParse
 import okhttp3.internal.commonToString
 
 actual class CacheControl internal actual constructor(
@@ -61,10 +67,20 @@ actual class CacheControl internal actual constructor(
 
     actual fun immutable() = commonImmutable()
 
+    actual fun maxAge(maxAge: Int, timeUnit: DurationUnit) = commonMaxAge(maxAge, timeUnit)
+
+    actual fun maxStale(maxStale: Int, timeUnit: DurationUnit) = commonMaxStale(maxStale, timeUnit)
+
+    actual fun minFresh(minFresh: Int, timeUnit: DurationUnit) = commonMinFresh(minFresh, timeUnit)
+
     actual fun build(): CacheControl = commonBuild()
   }
 
   actual companion object {
     actual val FORCE_NETWORK = commonForceNetwork()
+
+    actual val FORCE_CACHE = commonForceCache()
+
+    actual fun parse(headers: Headers): CacheControl = commonParse(headers)
   }
 }
