@@ -16,34 +16,36 @@
 package okhttp3.internal.connection
 
 import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.Socket
+import java.net.UnknownServiceException
 import okhttp3.Address
+import okhttp3.ConnectionSpec
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
 import okhttp3.Route
+import okhttp3.internal.EMPTY_RESPONSE
 import okhttp3.internal.canReuseConnectionFor
 import okhttp3.internal.closeQuietly
 import okhttp3.internal.connection.RoutePlanner.Plan
 import okhttp3.internal.http.RealInterceptorChain
-import okhttp3.internal.http2.ConnectionShutdownException
-import okhttp3.internal.http2.ErrorCode
-import okhttp3.internal.http2.StreamResetException
+import okhttp3.internal.platform.Platform
+import okhttp3.internal.toHostHeader
+import okhttp3.internal.userAgent
 
-internal class RealRoutePlanner(
+class RealRoutePlanner(
   private val client: OkHttpClient,
   override val address: Address,
   private val call: RealCall,
-  private val chain: RealInterceptorChain,
+  chain: RealInterceptorChain,
 ) : RoutePlanner {
-  private val connectionPool = client.connectionPool.delegate
-  private val eventListener = call.eventListener
   private val doExtensiveHealthChecks = chain.request.method != "GET"
 
   private var routeSelection: RouteSelector.Selection? = null
   private var routeSelector: RouteSelector? = null
-  private var refusedStreamCount = 0
-  private var connectionShutdownCount = 0
-  private var otherFailureCount = 0
   private var nextRouteToTry: Route? = null
 
   override fun isCanceled(): Boolean = call.isCanceled()
@@ -52,11 +54,6 @@ internal class RealRoutePlanner(
   override fun plan(): Plan {
     val reuseCallConnection = planReuseCallConnection()
     if (reuseCallConnection != null) return reuseCallConnection
-
-    // We need a new connection. Give it fresh stats.
-    refusedStreamCount = 0
-    connectionShutdownCount = 0
-    otherFailureCount = 0
 
     // Attempt to get a connection from the pool.
     val pooled1 = planReusePooledConnection()
@@ -67,7 +64,7 @@ internal class RealRoutePlanner(
 
     // Now that we have a set of IP addresses, make another attempt at getting a connection from
     // the pool. We have a better chance of matching thanks to connection coalescing.
-    val pooled2 = planReusePooledConnection(connect.connection, connect.routes)
+    val pooled2 = planReusePooledConnection(connect, connect.routes)
     if (pooled2 != null) return pooled2
 
     return connect
@@ -108,24 +105,24 @@ internal class RealRoutePlanner(
 
     // The call's connection was released.
     toClose?.closeQuietly()
-    eventListener.connectionReleased(call, candidate)
+    call.eventListener.connectionReleased(call, candidate)
     return null
   }
 
   /** Plans to make a new connection by deciding which route to try next. */
   @Throws(IOException::class)
-  private fun planConnect(): RealConnectPlan {
+  private fun planConnect(): ConnectPlan {
     // Use a route from a preceding coalesced connection.
     val localNextRouteToTry = nextRouteToTry
     if (localNextRouteToTry != null) {
       nextRouteToTry = null
-      return RealConnectPlan(localNextRouteToTry)
+      return planConnectToRoute(localNextRouteToTry)
     }
 
     // Use a route from an existing route selection.
     val existingRouteSelection = routeSelection
     if (existingRouteSelection != null && existingRouteSelection.hasNext()) {
-      return RealConnectPlan(existingRouteSelection.next())
+      return planConnectToRoute(existingRouteSelection.next())
     }
 
     // Decide which proxy to use, if any. This may block in ProxySelector.select().
@@ -136,7 +133,7 @@ internal class RealRoutePlanner(
         routeDatabase = call.client.routeDatabase,
         call = call,
         fastFallback = client.fastFallback,
-        eventListener = eventListener
+        eventListener = call.eventListener
       )
       routeSelector = newRouteSelector
     }
@@ -148,136 +145,125 @@ internal class RealRoutePlanner(
 
     if (call.isCanceled()) throw IOException("Canceled")
 
-    return RealConnectPlan(newRouteSelection.next(), newRouteSelection.routes)
+    return planConnectToRoute(newRouteSelection.next(), newRouteSelection.routes)
   }
 
   /**
    * Returns a plan to reuse a pooled connection, or null if the pool doesn't have a connection for
    * this address.
    *
-   * If [connectionToReplace] is non-null, this will swap it for a pooled connection if that
-   * pooled connection uses HTTP/2. That results in fewer sockets overall and thus fewer TCP slow
-   * starts.
+   * If [planToReplace] is non-null, this will swap it for a pooled connection if that pooled
+   * connection uses HTTP/2. That results in fewer sockets overall and thus fewer TCP slow starts.
    */
-  private fun planReusePooledConnection(
-    connectionToReplace: RealConnection? = null,
+  internal fun planReusePooledConnection(
+    planToReplace: ConnectPlan? = null,
     routes: List<Route>? = null,
   ): ReusePlan? {
-    val result = connectionPool.callAcquirePooledConnection(
+    val result = client.connectionPool.delegate.callAcquirePooledConnection(
       doExtensiveHealthChecks = doExtensiveHealthChecks,
       address = address,
       call = call,
       routes = routes,
-      requireMultiplexed = connectionToReplace != null && !connectionToReplace.isNew
+      requireMultiplexed = planToReplace != null && planToReplace.isReady
     ) ?: return null
 
     // If we coalesced our connection, remember the replaced connection's route. That way if the
     // coalesced connection later fails we don't waste a valid route.
-    if (connectionToReplace != null) {
-      nextRouteToTry = connectionToReplace.route()
-      if (!connectionToReplace.isNew) {
-        connectionToReplace.socket().closeQuietly()
-      }
+    if (planToReplace != null) {
+      nextRouteToTry = planToReplace.route
+      planToReplace.closeQuietly()
     }
 
-    eventListener.connectionAcquired(call, result)
+    call.eventListener.connectionAcquired(call, result)
     return ReusePlan(result)
   }
 
-  /** Reuse an existing connection. */
-  internal class ReusePlan(
-    val connection: RealConnection,
-  ) : Plan {
+  /** Returns a plan for the first attempt at [route]. This throws if no plan is possible. */
+  @Throws(IOException::class)
+  internal fun planConnectToRoute(route: Route, routes: List<Route>? = null): ConnectPlan {
+    if (route.address.sslSocketFactory == null) {
+      if (ConnectionSpec.CLEARTEXT !in route.address.connectionSpecs) {
+        throw UnknownServiceException("CLEARTEXT communication not enabled for client")
+      }
 
-    override val isConnected: Boolean = true
-
-    override fun connect() {
-      error("already connected")
-    }
-
-    override fun handleSuccess() = connection
-
-    override fun cancel() {
-      error("unexpected cancel of reused connection")
-    }
-  }
-
-  /** Establish a new connection. */
-  internal inner class RealConnectPlan(
-    route: Route,
-    val routes: List<Route>? = null,
-  ) : Plan {
-    val connection = RealConnection(client.taskRunner, connectionPool, route)
-
-    override val isConnected: Boolean
-      get() = !connection.isNew
-
-    @Throws(IOException::class)
-    override fun connect() {
-      // Tell the call about the connecting call so async cancels work.
-      call.connectionsToCancel += connection
-      try {
-        connection.connect(
-          connectTimeout = chain.connectTimeoutMillis,
-          readTimeout = chain.readTimeoutMillis,
-          writeTimeout = chain.writeTimeoutMillis,
-          pingIntervalMillis = client.pingIntervalMillis,
-          connectionRetryEnabled = client.retryOnConnectionFailure,
-          call = call,
-          eventListener = eventListener,
+      val host = route.address.url.host
+      if (!Platform.get().isCleartextTrafficPermitted(host)) {
+        throw UnknownServiceException(
+          "CLEARTEXT communication to $host not permitted by network security policy"
         )
-      } finally {
-        call.connectionsToCancel -= connection
       }
-    }
-
-    /** Returns the connection to use, which might be different from [connection]. */
-    override fun handleSuccess(): RealConnection {
-      call.client.routeDatabase.connected(connection.route())
-
-      // If we raced another call connecting to this host, coalesce the connections. This makes for
-      // 3 different lookups in the connection pool!
-      val pooled3 = planReusePooledConnection(connection, routes)
-      if (pooled3 != null) return pooled3.connection
-
-      synchronized(connection) {
-        connectionPool.put(connection)
-        call.acquireConnectionNoEvents(connection)
-      }
-
-      eventListener.connectionAcquired(call, connection)
-      return connection
-    }
-
-    override fun cancel() {
-      connection.cancel()
-    }
-  }
-
-  override fun trackFailure(e: IOException) {
-    if (e is StreamResetException && e.errorCode == ErrorCode.REFUSED_STREAM) {
-      refusedStreamCount++
-    } else if (e is ConnectionShutdownException) {
-      connectionShutdownCount++
     } else {
-      otherFailureCount++
+      if (Protocol.H2_PRIOR_KNOWLEDGE in route.address.protocols) {
+        throw UnknownServiceException("H2_PRIOR_KNOWLEDGE cannot be used with HTTPS")
+      }
     }
+
+    val tunnelRequest = when {
+      route.requiresTunnel() -> createTunnelRequest(route)
+      else -> null
+    }
+
+    return ConnectPlan(
+      client = client,
+      call = call,
+      routePlanner = this,
+      route = route,
+      routes = routes,
+      attempt = 0,
+      tunnelRequest = tunnelRequest,
+      connectionSpecIndex = -1,
+      isTlsFallback = false,
+    )
   }
 
-  override fun hasFailure(): Boolean {
-    return refusedStreamCount > 0 || connectionShutdownCount > 0 || otherFailureCount > 0
+  /**
+   * Returns a request that creates a TLS tunnel via an HTTP proxy. Everything in the tunnel request
+   * is sent unencrypted to the proxy server, so tunnels include only the minimum set of headers.
+   * This avoids sending potentially sensitive data like HTTP cookies to the proxy unencrypted.
+   *
+   * In order to support preemptive authentication we pass a fake "Auth Failed" response to the
+   * authenticator. This gives the authenticator the option to customize the CONNECT request. It can
+   * decline to do so by returning null, in which case OkHttp will use it as-is.
+   */
+  @Throws(IOException::class)
+  private fun createTunnelRequest(route: Route): Request {
+    val proxyConnectRequest = Request.Builder()
+      .url(route.address.url)
+      .method("CONNECT", null)
+      .header("Host", route.address.url.toHostHeader(includeDefaultPort = true))
+      .header("Proxy-Connection", "Keep-Alive") // For HTTP/1.0 proxies like Squid.
+      .header("User-Agent", userAgent)
+      .build()
+
+    val fakeAuthChallengeResponse = Response.Builder()
+      .request(proxyConnectRequest)
+      .protocol(Protocol.HTTP_1_1)
+      .code(HttpURLConnection.HTTP_PROXY_AUTH)
+      .message("Preemptive Authenticate")
+      .body(EMPTY_RESPONSE)
+      .sentRequestAtMillis(-1L)
+      .receivedResponseAtMillis(-1L)
+      .header("Proxy-Authenticate", "OkHttp-Preemptive")
+      .build()
+
+    val authenticatedRequest = route.address.proxyAuthenticator
+      .authenticate(route, fakeAuthChallengeResponse)
+
+    return authenticatedRequest ?: proxyConnectRequest
   }
 
-  override fun hasMoreRoutes(): Boolean {
+  override fun hasNext(failedConnection: RealConnection?): Boolean {
     if (nextRouteToTry != null) {
       return true
     }
 
-    val retryRoute = retryRoute()
-    if (retryRoute != null) {
-      // Lock in the route because retryRoute() is racy and we don't want to call it twice.
-      nextRouteToTry = retryRoute
-      return true
+    if (failedConnection != null) {
+      val retryRoute = retryRoute(failedConnection)
+      if (retryRoute != null) {
+        // Lock in the route because retryRoute() is racy and we don't want to call it twice.
+        nextRouteToTry = retryRoute
+        return true
+      }
     }
 
     // If we have a routes left, use 'em.
@@ -291,17 +277,11 @@ internal class RealRoutePlanner(
   }
 
   /**
-   * Return the route from the current connection if it should be retried, even if the connection
-   * itself is unhealthy. The biggest gotcha here is that we shouldn't reuse routes from coalesced
+   * Return the route from [connection] if it should be retried, even if the connection itself is
+   * unhealthy. The biggest gotcha here is that we shouldn't reuse routes from coalesced
    * connections.
    */
-  private fun retryRoute(): Route? {
-    if (refusedStreamCount > 1 || connectionShutdownCount > 1 || otherFailureCount > 0) {
-      return null // This route has too many problems to retry.
-    }
-
-    val connection = call.connection ?: return null
-
+  private fun retryRoute(connection: RealConnection): Route? {
     synchronized(connection) {
       if (connection.routeFailureCount != 0) return null
       if (!connection.noNewExchanges) return null // This route is still in use.

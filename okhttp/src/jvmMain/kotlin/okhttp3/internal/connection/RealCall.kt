@@ -64,7 +64,7 @@ class RealCall(
   /** The application's original request unadulterated by redirects or auth headers. */
   val originalRequest: Request,
   val forWebSocket: Boolean
-) : Call {
+) : Call, Cloneable {
   private val connectionPool: RealConnectionPool = client.connectionPool.delegate
 
   internal val eventListener: EventListener = client.eventListenerFactory.create(this)
@@ -85,7 +85,7 @@ class RealCall(
   private var callStackTrace: Any? = null
 
   /** Finds an exchange to send the next request and receive the next response. */
-  private var routePlanner: RoutePlanner? = null
+  private var exchangeFinder: ExchangeFinder? = null
 
   var connection: RealConnection? = null
     private set
@@ -116,7 +116,7 @@ class RealCall(
 
   @Volatile private var canceled = false
   @Volatile private var exchange: Exchange? = null
-  internal val connectionsToCancel = CopyOnWriteArrayList<RealConnection>()
+  internal val plansToCancel = CopyOnWriteArrayList<RoutePlanner.Plan>()
 
   override fun timeout(): Timeout = timeout
 
@@ -139,8 +139,8 @@ class RealCall(
 
     canceled = true
     exchange?.cancel()
-    for (connection in connectionsToCancel) {
-      connection.cancel()
+    for (plan in plansToCancel) {
+      plan.cancel()
     }
 
     eventListener.canceled(this)
@@ -242,12 +242,16 @@ class RealCall(
     }
 
     if (newRoutePlanner) {
-      this.routePlanner = RealRoutePlanner(
+      val routePlanner = RealRoutePlanner(
         client,
         createAddress(request.url),
         this,
         chain,
       )
+      this.exchangeFinder = when {
+        client.fastFallback -> FastFallbackExchangeFinder(routePlanner, client.taskRunner)
+        else -> SequentialExchangeFinder(routePlanner)
+      }
     }
   }
 
@@ -259,13 +263,10 @@ class RealCall(
       check(!requestBodyOpen)
     }
 
-    val routePlanner = this.routePlanner!!
-    val connection = when {
-      client.fastFallback -> FastFallbackExchangeFinder(routePlanner, client.taskRunner).find()
-      else -> ExchangeFinder(routePlanner).find()
-    }
+    val exchangeFinder = this.exchangeFinder!!
+    val connection = exchangeFinder.find()
     val codec = connection.newCodec(client, chain)
-    val result = Exchange(this, eventListener, routePlanner, codec)
+    val result = Exchange(this, eventListener, exchangeFinder, codec)
     this.interceptorScopedExchange = result
     this.exchange = result
     synchronized(this) {
@@ -465,7 +466,10 @@ class RealCall(
     )
   }
 
-  fun retryAfterFailure(): Boolean = routePlanner!!.hasFailure() && routePlanner!!.hasMoreRoutes()
+  fun retryAfterFailure(): Boolean {
+    return exchange?.hasFailure == true &&
+      exchangeFinder!!.routePlanner.hasNext(exchange?.connection)
+  }
 
   /**
    * Returns a string that describes this call. Doesn't include a full URL as that might contain

@@ -15,11 +15,13 @@
  */
 package okhttp3
 
+import okhttp3.internal.concurrent.TaskFaker
+import okhttp3.internal.connection.RealConnection
+import okhttp3.internal.connection.RoutePlanner
+import okhttp3.internal.connection.RoutePlanner.ConnectResult
 import java.io.Closeable
 import java.io.IOException
 import java.util.concurrent.LinkedBlockingDeque
-import okhttp3.internal.concurrent.TaskFaker
-import okhttp3.internal.connection.RoutePlanner
 
 class FakeRoutePlanner(
   private val taskFaker: TaskFaker,
@@ -34,7 +36,6 @@ class FakeRoutePlanner(
 
   val events = LinkedBlockingDeque<String>()
   var canceled = false
-  var hasFailure = false
   private var nextPlanId = 0
   private var nextPlanIndex = 0
   private val plans = mutableListOf<FakePlan>()
@@ -55,17 +56,18 @@ class FakeRoutePlanner(
     }
     val result = plans[nextPlanIndex++]
     events += "take plan ${result.id}"
+
+    if (result.yieldBeforePlanReturns) {
+      taskFaker.yield()
+    }
+
+    val planningThrowable = result.planningThrowable
+    if (planningThrowable != null) throw planningThrowable
+
     return result
   }
 
-  override fun trackFailure(e: IOException) {
-    events += "tracking failure: $e"
-    hasFailure = true
-  }
-
-  override fun hasFailure() = hasFailure
-
-  override fun hasMoreRoutes(): Boolean {
+  override fun hasNext(failedConnection: RealConnection?): Boolean {
     return nextPlanIndex < plans.size
   }
 
@@ -80,30 +82,103 @@ class FakeRoutePlanner(
   inner class FakePlan(
     val id: Int
   ) : RoutePlanner.Plan {
+    var planningThrowable: Throwable? = null
     var canceled = false
+    var connectState = ConnectState.READY
     val connection = factory.newConnection(pool, factory.newRoute(address))
+    var retry: FakePlan? = null
+    var retryTaken = false
+    var yieldBeforePlanReturns = false
 
-    override var isConnected = false
-    var connectDelayNanos = 0L
-    var connectThrowable: Throwable? = null
+    override val isReady: Boolean
+      get() = connectState == ConnectState.TLS_CONNECTED
 
-    override fun connect() {
-      check(!isConnected) { "already connected" }
-      events += "plan $id connecting..."
+    var tcpConnectDelayNanos = 0L
+    var tcpConnectThrowable: Throwable? = null
+    var yieldBeforeTcpConnectReturns = false
+    var connectTcpNextPlan: FakePlan? = null
+    var tlsConnectDelayNanos = 0L
+    var tlsConnectThrowable: Throwable? = null
+    var connectTlsNextPlan: FakePlan? = null
 
-      taskFaker.sleep(connectDelayNanos)
+    fun createRetry(): FakePlan {
+      check(retry == null)
+      return FakePlan(nextPlanId++)
+        .also {
+          retry = it
+        }
+    }
 
-      when {
-        connectThrowable != null -> {
-          events += "plan $id connect failed"
-          throw connectThrowable!!
+    fun createConnectTcpNextPlan(): FakePlan {
+      check(connectTcpNextPlan == null)
+      return FakePlan(nextPlanId++)
+        .also {
+          connectTcpNextPlan = it
+        }
+    }
+
+    fun createConnectTlsNextPlan(): FakePlan {
+      check(connectTlsNextPlan == null)
+      return FakePlan(nextPlanId++)
+        .also {
+          connectTlsNextPlan = it
+        }
+    }
+
+    override fun connectTcp(): ConnectResult {
+      check(connectState == ConnectState.READY)
+      events += "plan $id TCP connecting..."
+
+      taskFaker.sleep(tcpConnectDelayNanos)
+
+      if (yieldBeforeTcpConnectReturns) {
+        taskFaker.yield()
+      }
+
+      return when {
+        tcpConnectThrowable != null -> {
+          events += "plan $id TCP connect failed"
+          ConnectResult(this, nextPlan = connectTcpNextPlan, throwable = tcpConnectThrowable)
         }
         canceled -> {
-          events += "plan $id connect canceled"
+          events += "plan $id TCP connect canceled"
+          ConnectResult(this, nextPlan = connectTcpNextPlan, throwable = IOException("canceled"))
+        }
+        connectTcpNextPlan != null -> {
+          events += "plan $id needs follow-up"
+          ConnectResult(this, nextPlan = connectTcpNextPlan)
         }
         else -> {
-          events += "plan $id connected"
-          isConnected = true
+          events += "plan $id TCP connected"
+          connectState = ConnectState.TCP_CONNECTED
+          ConnectResult(this)
+        }
+      }
+    }
+
+    override fun connectTlsEtc(): ConnectResult {
+      check(connectState == ConnectState.TCP_CONNECTED)
+      events += "plan $id TLS connecting..."
+
+      taskFaker.sleep(tlsConnectDelayNanos)
+
+      return when {
+        tlsConnectThrowable != null -> {
+          events += "plan $id TLS connect failed"
+          ConnectResult(this, nextPlan = connectTlsNextPlan, throwable = tlsConnectThrowable)
+        }
+        canceled -> {
+          events += "plan $id TLS connect canceled"
+          ConnectResult(this, nextPlan = connectTlsNextPlan, throwable = IOException("canceled"))
+        }
+        connectTlsNextPlan != null -> {
+          events += "plan $id needs follow-up"
+          ConnectResult(this, nextPlan = connectTlsNextPlan)
+        }
+        else -> {
+          events += "plan $id TLS connected"
+          connectState = ConnectState.TLS_CONNECTED
+          ConnectResult(this)
         }
       }
     }
@@ -114,5 +189,17 @@ class FakeRoutePlanner(
       events += "plan $id cancel"
       canceled = true
     }
+
+    override fun retry(): FakePlan? {
+      check(!retryTaken)
+      retryTaken = true
+      return retry
+    }
+  }
+
+  enum class ConnectState {
+    READY,
+    TCP_CONNECTED,
+    TLS_CONNECTED,
   }
 }

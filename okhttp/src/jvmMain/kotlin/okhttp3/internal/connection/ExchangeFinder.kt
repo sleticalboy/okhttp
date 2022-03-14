@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Square, Inc.
+ * Copyright (C) 2022 Square, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,34 +15,8 @@
  */
 package okhttp3.internal.connection
 
-import java.io.IOException
+interface ExchangeFinder {
+  val routePlanner: RoutePlanner
 
-internal class ExchangeFinder(
-  private val routePlanner: RoutePlanner
-) {
-  fun find(): RealConnection {
-    var firstException: IOException? = null
-    while (true) {
-      if (routePlanner.isCanceled()) throw IOException("Canceled")
-
-      try {
-        val plan = routePlanner.plan()
-        if (!plan.isConnected) {
-          plan.connect()
-        }
-        return plan.handleSuccess()
-      } catch (e: IOException) {
-        routePlanner.trackFailure(e)
-
-        if (firstException == null) {
-          firstException = e
-        } else {
-          firstException.addSuppressed(e)
-        }
-        if (!routePlanner.hasMoreRoutes()) {
-          throw firstException
-        }
-      }
-    }
-  }
+  fun find(): RealConnection
 }
