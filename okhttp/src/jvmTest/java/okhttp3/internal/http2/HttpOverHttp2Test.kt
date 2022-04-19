@@ -45,6 +45,7 @@ import okhttp3.Cookie
 import okhttp3.Credentials.basic
 import okhttp3.EventListener
 import okhttp3.Headers.Companion.headersOf
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -160,13 +161,9 @@ class HttpOverHttp2Test {
         .setBody("ABCDE")
         .setStatus("HTTP/1.1 200 Sweet")
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/foo"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/foo")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABCDE")
+    assertThat(response.body.string()).isEqualTo("ABCDE")
     assertThat(response.code).isEqualTo(200)
     assertThat(response.message).isEqualTo("")
     assertThat(response.protocol).isEqualTo(protocol)
@@ -183,16 +180,12 @@ class HttpOverHttp2Test {
     responseWithoutBody.status = "HTTP/1.1 204"
     responseWithoutBody.removeHeader("Content-Length")
     server.enqueue(responseWithoutBody)
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/foo"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/foo")))
     val response = call.execute()
 
     // Body contains nothing.
-    assertThat(response.body!!.bytes().size).isEqualTo(0)
-    assertThat(response.body!!.contentLength()).isEqualTo(0)
+    assertThat(response.body.bytes().size).isEqualTo(0)
+    assertThat(response.body.contentLength()).isEqualTo(0)
 
     // Content-Length header doesn't exist in a 204 response.
     assertThat(response.header("content-length")).isNull()
@@ -216,8 +209,8 @@ class HttpOverHttp2Test {
     val response = call.execute()
 
     // Body contains nothing.
-    assertThat(response.body!!.bytes().size).isEqualTo(0)
-    assertThat(response.body!!.contentLength()).isEqualTo(0)
+    assertThat(response.body.bytes().size).isEqualTo(0)
+    assertThat(response.body.contentLength()).isEqualTo(0)
 
     // Content-Length header stays correctly.
     assertThat(response.header("content-length")).isEqualTo("5")
@@ -229,14 +222,10 @@ class HttpOverHttp2Test {
   fun emptyResponse(protocol: Protocol, mockWebServer: MockWebServer) {
     setUp(protocol, mockWebServer)
     server.enqueue(MockResponse())
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/foo"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/foo")))
     val response = call.execute()
-    assertThat(response.body!!.byteStream().read()).isEqualTo(-1)
-    response.body!!.close()
+    assertThat(response.body.byteStream().read()).isEqualTo(-1)
+    response.body.close()
   }
 
   @ParameterizedTest @ArgumentsSource(ProtocolParamProvider::class)
@@ -245,19 +234,19 @@ class HttpOverHttp2Test {
     val postBytes = "FGHIJ".toByteArray()
     server.enqueue(MockResponse().setBody("ABCDE"))
     val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/foo"))
-        .post(object : RequestBody() {
+      Request(
+        url = server.url("/foo"),
+        body = object : RequestBody() {
           override fun contentType(): MediaType = "text/plain; charset=utf-8".toMediaType()
 
           override fun writeTo(sink: BufferedSink) {
             sink.write(postBytes)
           }
-        })
-        .build()
+        },
+      )
     )
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABCDE")
+    assertThat(response.body.string()).isEqualTo("ABCDE")
     val request = server.takeRequest()
     assertThat(request.requestLine).isEqualTo("POST /foo HTTP/1.1")
     org.junit.jupiter.api.Assertions.assertArrayEquals(postBytes, request.body.readByteArray())
@@ -270,9 +259,9 @@ class HttpOverHttp2Test {
     val postBytes = "FGHIJ".toByteArray()
     server.enqueue(MockResponse().setBody("ABCDE"))
     val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/foo"))
-        .post(object : RequestBody() {
+      Request(
+        url = server.url("/foo"),
+        body = object : RequestBody() {
           override fun contentType(): MediaType = "text/plain; charset=utf-8".toMediaType()
 
           override fun contentLength(): Long = postBytes.size.toLong()
@@ -280,11 +269,11 @@ class HttpOverHttp2Test {
           override fun writeTo(sink: BufferedSink) {
             sink.write(postBytes)
           }
-        })
-        .build()
+        },
+      )
     )
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABCDE")
+    assertThat(response.body.string()).isEqualTo("ABCDE")
     val request = server.takeRequest()
     assertThat(request.requestLine).isEqualTo("POST /foo HTTP/1.1")
     org.junit.jupiter.api.Assertions.assertArrayEquals(postBytes, request.body.readByteArray())
@@ -301,9 +290,9 @@ class HttpOverHttp2Test {
     val postBytes = "FGHIJ".toByteArray()
     server.enqueue(MockResponse().setBody("ABCDE"))
     val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/foo"))
-        .post(object : RequestBody() {
+      Request(
+        url = server.url("/foo"),
+        body = object : RequestBody() {
           override fun contentType(): MediaType = "text/plain; charset=utf-8".toMediaType()
 
           override fun contentLength(): Long = postBytes.size.toLong()
@@ -313,11 +302,11 @@ class HttpOverHttp2Test {
             sink.flush() // Http2Connection.writeData subject to write window
             sink.close() // Http2Connection.writeData empty frame
           }
-        })
-        .build()
+        },
+      )
     )
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABCDE")
+    assertThat(response.body.string()).isEqualTo("ABCDE")
     val request = server.takeRequest()
     assertThat(request.requestLine).isEqualTo("POST /foo HTTP/1.1")
     org.junit.jupiter.api.Assertions.assertArrayEquals(postBytes, request.body.readByteArray())
@@ -330,22 +319,14 @@ class HttpOverHttp2Test {
     setUp(protocol, mockWebServer)
     server.enqueue(MockResponse().setBody("ABCDEF"))
     server.enqueue(MockResponse().setBody("GHIJKL"))
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/r1"))
-        .build()
-    )
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/r1"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/r1")))
+    val call2 = client.newCall(Request(server.url("/r1")))
     val response1 = call1.execute()
     val response2 = call2.execute()
-    assertThat(response1.body!!.source().readUtf8(3)).isEqualTo("ABC")
-    assertThat(response2.body!!.source().readUtf8(3)).isEqualTo("GHI")
-    assertThat(response1.body!!.source().readUtf8(3)).isEqualTo("DEF")
-    assertThat(response2.body!!.source().readUtf8(3)).isEqualTo("JKL")
+    assertThat(response1.body.source().readUtf8(3)).isEqualTo("ABC")
+    assertThat(response2.body.source().readUtf8(3)).isEqualTo("GHI")
+    assertThat(response1.body.source().readUtf8(3)).isEqualTo("DEF")
+    assertThat(response2.body.source().readUtf8(3)).isEqualTo("JKL")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(1)
     response1.close()
@@ -363,27 +344,19 @@ class HttpOverHttp2Test {
       MockResponse()
         .setBody("abc")
     )
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response1 = call1.execute()
     waitForDataFrames(Http2Connection.OKHTTP_CLIENT_WINDOW_SIZE)
 
     // Cancel the call and discard what we've buffered for the response body. This should free up
     // the connection flow-control window so new requests can proceed.
     call1.cancel()
-    assertThat(response1.body!!.source().discard(1, TimeUnit.SECONDS))
+    assertThat(response1.body.source().discard(1, TimeUnit.SECONDS))
       .overridingErrorMessage("Call should not have completed successfully.")
       .isFalse
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.string()).isEqualTo("abc")
+    assertThat(response2.body.string()).isEqualTo("abc")
   }
 
   /** Wait for the client to receive `dataLength` DATA frames.  */
@@ -414,11 +387,7 @@ class HttpOverHttp2Test {
       MockResponse()
         .setBody("XXX")
     )
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response1 = call1.execute()
     waitForDataFrames(Http2Connection.OKHTTP_CLIENT_WINDOW_SIZE)
 
@@ -426,13 +395,9 @@ class HttpOverHttp2Test {
     // the connection flow-control window.
     call1.cancel()
     response1.close()
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.string()).isEqualTo("abc")
+    assertThat(response2.body.string()).isEqualTo("abc")
   }
 
   @ParameterizedTest @ArgumentsSource(ProtocolParamProvider::class)
@@ -448,33 +413,25 @@ class HttpOverHttp2Test {
       MockResponse()
         .setBody("abc")
     )
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response1 = call1.execute()
     waitForDataFrames(Http2Connection.OKHTTP_CLIENT_WINDOW_SIZE)
-    assertThat(response1.body!!.contentLength()).isEqualTo(
+    assertThat(response1.body.contentLength()).isEqualTo(
       Http2Connection.OKHTTP_CLIENT_WINDOW_SIZE.toLong()
     )
-    val read = response1.body!!.source().read(ByteArray(8192))
+    val read = response1.body.source().read(ByteArray(8192))
     assertThat(read).isEqualTo(8192)
 
     // Make a second call that should transmit the response headers. The response body won't be
     // transmitted until the flow-control window is updated from the first request.
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
     assertThat(response2.code).isEqualTo(200)
 
     // Close the response body. This should discard the buffered data and update the connection
     // flow-control window.
     response1.close()
-    assertThat(response2.body!!.string()).isEqualTo("abc")
+    assertThat(response2.body.string()).isEqualTo("abc")
   }
 
   /** https://github.com/square/okhttp/issues/373  */
@@ -501,13 +458,9 @@ class HttpOverHttp2Test {
         .addHeader("Content-Encoding: gzip")
         .setBody(gzip("ABCABCABC"))
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/r1"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/r1")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABCABCABC")
+    assertThat(response.body.string()).isEqualTo("ABCABCABC")
   }
 
   @ParameterizedTest @ArgumentsSource(ProtocolParamProvider::class)
@@ -527,13 +480,9 @@ class HttpOverHttp2Test {
     client = client.newBuilder()
       .authenticator(RecordingOkAuthenticator(credential, "Basic"))
       .build()
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("Successful auth!")
+    assertThat(response.body.string()).isEqualTo("Successful auth!")
     val denied = server.takeRequest()
     assertThat(denied.getHeader("Authorization")).isNull()
     val accepted = server.takeRequest()
@@ -550,13 +499,9 @@ class HttpOverHttp2Test {
         .setBody("This page has moved!")
     )
     server.enqueue(MockResponse().setBody("This is the new location!"))
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("This is the new location!")
+    assertThat(response.body.string()).isEqualTo("This is the new location!")
     val request1 = server.takeRequest()
     assertThat(request1.path).isEqualTo("/")
     val request2 = server.takeRequest()
@@ -567,13 +512,9 @@ class HttpOverHttp2Test {
   fun readAfterLastByte(protocol: Protocol, mockWebServer: MockWebServer) {
     setUp(protocol, mockWebServer)
     server.enqueue(MockResponse().setBody("ABC"))
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    val inputStream = response.body!!.byteStream()
+    val inputStream = response.body.byteStream()
     assertThat(inputStream.read()).isEqualTo('A'.code)
     assertThat(inputStream.read()).isEqualTo('B'.code)
     assertThat(inputStream.read()).isEqualTo('C'.code)
@@ -592,11 +533,7 @@ class HttpOverHttp2Test {
       .build()
 
     // Make a call expecting a timeout reading the response headers.
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     try {
       call1.execute()
       fail<Any?>("Should have timed out!")
@@ -605,13 +542,9 @@ class HttpOverHttp2Test {
     }
 
     // Confirm that a subsequent request on the same connection is not impacted.
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.string()).isEqualTo("A")
+    assertThat(response2.body.string()).isEqualTo("A")
 
     // Confirm that the connection was reused.
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
@@ -635,13 +568,9 @@ class HttpOverHttp2Test {
     client = client.newBuilder()
       .readTimeout(Duration.ofSeconds(2))
       .build()
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo(String(body))
+    assertThat(response.body.string()).isEqualTo(String(body))
   }
 
   /**
@@ -668,27 +597,19 @@ class HttpOverHttp2Test {
       .build()
 
     // Make a call expecting a timeout reading the response body.
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response1 = call1.execute()
     try {
-      response1.body!!.string()
+      response1.body.string()
       fail<Any?>("Should have timed out!")
     } catch (expected: SocketTimeoutException) {
       assertThat(expected.message).isEqualTo("timeout")
     }
 
     // Confirm that a subsequent request on the same connection is not impacted.
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.string()).isEqualTo(body)
+    assertThat(response2.body.string()).isEqualTo(body)
 
     // Confirm that the connection was reused.
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
@@ -722,7 +643,7 @@ class HttpOverHttp2Test {
           .build()
       )
     val response1 = call1.execute()
-    assertThat(response1.body!!.string()).isEqualTo("A")
+    assertThat(response1.body.string()).isEqualTo("A")
     try {
       call2.execute()
       fail<Any?>()
@@ -745,30 +666,18 @@ class HttpOverHttp2Test {
         .addHeader("cache-control: max-age=60")
         .setBody("A")
     )
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response1 = call1.execute()
-    assertThat(response1.body!!.string()).isEqualTo("A")
+    assertThat(response1.body.string()).isEqualTo("A")
     assertThat(cache.requestCount()).isEqualTo(1)
     assertThat(cache.networkCount()).isEqualTo(1)
     assertThat(cache.hitCount()).isEqualTo(0)
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.string()).isEqualTo("A")
-    val call3 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    assertThat(response2.body.string()).isEqualTo("A")
+    val call3 = client.newCall(Request(server.url("/")))
     val response3 = call3.execute()
-    assertThat(response3.body!!.string()).isEqualTo("A")
+    assertThat(response3.body.string()).isEqualTo("A")
     assertThat(cache.requestCount()).isEqualTo(3)
     assertThat(cache.networkCount()).isEqualTo(1)
     assertThat(cache.hitCount()).isEqualTo(2)
@@ -789,23 +698,15 @@ class HttpOverHttp2Test {
       MockResponse()
         .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED)
     )
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response1 = call1.execute()
-    assertThat(response1.body!!.string()).isEqualTo("A")
+    assertThat(response1.body.string()).isEqualTo("A")
     assertThat(cache.requestCount()).isEqualTo(1)
     assertThat(cache.networkCount()).isEqualTo(1)
     assertThat(cache.hitCount()).isEqualTo(0)
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.string()).isEqualTo("A")
+    assertThat(response2.body.string()).isEqualTo("A")
     assertThat(cache.requestCount()).isEqualTo(2)
     assertThat(cache.networkCount()).isEqualTo(2)
     assertThat(cache.hitCount()).isEqualTo(1)
@@ -827,22 +728,14 @@ class HttpOverHttp2Test {
         .addHeader("cache-control: max-age=60")
         .setBody("EFGH")
     )
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response1 = call1.execute()
-    assertThat(response1.body!!.source().readUtf8(2)).isEqualTo("AB")
-    response1.body!!.close()
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    assertThat(response1.body.source().readUtf8(2)).isEqualTo("AB")
+    response1.body.close()
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.source().readUtf8()).isEqualTo("ABCD")
-    response2.body!!.close()
+    assertThat(response2.body.source().readUtf8()).isEqualTo("ABCD")
+    response2.body.close()
   }
 
   @ParameterizedTest @ArgumentsSource(ProtocolParamProvider::class)
@@ -859,13 +752,9 @@ class HttpOverHttp2Test {
       .cookieJar(cookieJar)
       .build()
     server.enqueue(MockResponse())
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("")
+    assertThat(response.body.string()).isEqualTo("")
     val request = server.takeRequest()
     assertThat(request.getHeader("Cookie")).isEqualTo("a=b")
   }
@@ -881,13 +770,9 @@ class HttpOverHttp2Test {
       MockResponse()
         .addHeader("set-cookie: a=b")
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("")
+    assertThat(response.body.string()).isEqualTo("")
     cookieJar.assertResponseCookies("a=b; path=/")
   }
 
@@ -904,23 +789,15 @@ class HttpOverHttp2Test {
     )
 
     // Disconnect before the stream is created. A connection is still established!
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response = call1.execute()
     call1.cancel()
 
     // That connection is pooled, and it works.
     assertThat(client.connectionPool.connectionCount()).isEqualTo(1)
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.string()).isEqualTo("def")
+    assertThat(response2.body.string()).isEqualTo("def")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
 
     // Clean up the connection.
@@ -941,11 +818,7 @@ class HttpOverHttp2Test {
       MockResponse()
         .setBody("abc")
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     try {
       call.execute()
       fail<Any?>()
@@ -972,11 +845,9 @@ class HttpOverHttp2Test {
         .setBody("abc")
     )
 
-    val request = Request.Builder()
-      .url(server.url("/"))
-      .build()
+    val request = Request(server.url("/"))
     val response = client.newCall(request).execute()
-    assertThat(response.body!!.string()).isEqualTo("abc")
+    assertThat(response.body.string()).isEqualTo("abc")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
 
     // Note that although we have two routes available, we only use one. The retry is permitted
@@ -1009,9 +880,7 @@ class HttpOverHttp2Test {
         .setHttp2ErrorCode(ErrorCode.REFUSED_STREAM.httpCode)
     )
 
-    val request = Request.Builder()
-      .url(server.url("/"))
-      .build()
+    val request = Request(server.url("/"))
     try {
       client.newCall(request).execute()
       fail<Any?>()
@@ -1037,9 +906,7 @@ class HttpOverHttp2Test {
       MockResponse()
         .setBody("abc")
     )
-    val request = Request.Builder()
-      .url(server.url("/"))
-      .build()
+    val request = Request(server.url("/"))
 
     // First call fails because it only has one route.
     try {
@@ -1052,7 +919,7 @@ class HttpOverHttp2Test {
 
     // Second call succeeds on the pooled connection.
     val response = client.newCall(request).execute()
-    assertThat(response.body!!.string()).isEqualTo("abc")
+    assertThat(response.body.string()).isEqualTo("abc")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(1)
   }
 
@@ -1079,9 +946,7 @@ class HttpOverHttp2Test {
       MockResponse()
         .setBody("def")
     )
-    val request = Request.Builder()
-      .url(server.url("/"))
-      .build()
+    val request = Request(server.url("/"))
 
     // First call makes a new connection and fails because it is the only route.
     try {
@@ -1095,13 +960,13 @@ class HttpOverHttp2Test {
     // Second call attempts the pooled connection, and it fails. Then it retries a new route which
     // succeeds.
     val response2 = client.newCall(request).execute()
-    assertThat(response2.body!!.string()).isEqualTo("abc")
+    assertThat(response2.body.string()).isEqualTo("abc")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(1) // Pooled connection.
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0) // New connection.
 
     // Third call reuses the second connection.
     val response3 = client.newCall(request).execute()
-    assertThat(response3.body!!.string()).isEqualTo("def")
+    assertThat(response3.body.string()).isEqualTo("def")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(1) // New connection.
   }
 
@@ -1127,11 +992,7 @@ class HttpOverHttp2Test {
       MockResponse()
         .setBody("abc")
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     try {
       call.execute()
       fail<Any?>()
@@ -1169,13 +1030,9 @@ class HttpOverHttp2Test {
     client = client.newBuilder()
       .dns(DoubleInetAddressDns())
       .build()
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("abc")
+    assertThat(response.body.string()).isEqualTo("abc")
 
     // New connection.
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
@@ -1205,13 +1062,9 @@ class HttpOverHttp2Test {
     client = client.newBuilder()
       .dns(DoubleInetAddressDns())
       .build()
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("abc")
+    assertThat(response.body.string()).isEqualTo("abc")
 
     // New connection.
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
@@ -1249,13 +1102,9 @@ class HttpOverHttp2Test {
     callAndCancel(0, responseDequeuedLatches[0], requestCanceledLatches[0])
 
     // Make a second request to ensure the connection is reused.
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("def")
+    assertThat(response.body.string()).isEqualTo("def")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(1)
   }
 
@@ -1295,13 +1144,9 @@ class HttpOverHttp2Test {
     callAndCancel(1, responseDequeuedLatches[1], requestCanceledLatches[1])
 
     // Make a third request to ensure the connection is reused.
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ghi")
+    assertThat(response.body.string()).isEqualTo("ghi")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(2)
   }
 
@@ -1332,11 +1177,7 @@ class HttpOverHttp2Test {
     expectedSequenceNumber: Int, responseDequeuedLatch: CountDownLatch?,
     requestCanceledLatch: CountDownLatch?
   ) {
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val latch = CountDownLatch(1)
     call.enqueue(object : Callback {
       override fun onFailure(call: Call, e: IOException) {
@@ -1392,11 +1233,7 @@ class HttpOverHttp2Test {
     client = client.newBuilder()
       .retryOnConnectionFailure(false)
       .build()
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     try {
       call.execute()
       fail<Any?>()
@@ -1435,7 +1272,7 @@ class HttpOverHttp2Test {
     val latch = CountDownLatch(1)
     val responses: BlockingQueue<String?> = SynchronousQueue()
     val authenticator = okhttp3.Authenticator { route: Route?, response: Response? ->
-      responses.offer(response!!.body!!.string())
+      responses.offer(response!!.body.string())
       try {
         latch.await()
       } catch (e: InterruptedException) {
@@ -1452,14 +1289,12 @@ class HttpOverHttp2Test {
       }
 
       override fun onResponse(call: Call, response: Response) {
-        responses.offer(response.body!!.string())
+        responses.offer(response.body.string())
       }
     }
 
     // Make the first request waiting until we get our auth challenge.
-    val request = Request.Builder()
-      .url(server.url("/"))
-      .build()
+    val request = Request(server.url("/"))
     blockingAuthClient.newCall(request).enqueue(callback)
     val response1 = responses.take()
     assertThat(response1).isEqualTo("")
@@ -1490,11 +1325,7 @@ class HttpOverHttp2Test {
         .addHeaderLenient("Alpha", "α")
         .addHeaderLenient("β", "Beta")
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
     response.close()
     assertThat(response.header("Alpha")).isEqualTo("α")
@@ -1514,13 +1345,9 @@ class HttpOverHttp2Test {
         .setStatus("HTTP/1.1 200 Sweet")
         .withPush(pushPromise)
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/foo"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/foo")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABCDE")
+    assertThat(response.body.string()).isEqualTo("ABCDE")
     assertThat(response.code).isEqualTo(200)
     assertThat(response.message).isEqualTo("")
     val request = server.takeRequest()
@@ -1547,13 +1374,9 @@ class HttpOverHttp2Test {
         .setStatus("HTTP/1.1 200 Sweet")
         .withPush(pushPromise)
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/foo"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/foo")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABCDE")
+    assertThat(response.body.string()).isEqualTo("ABCDE")
     assertThat(response.code).isEqualTo(200)
     assertThat(response.message).isEqualTo("")
     val request = server.takeRequest()
@@ -1583,7 +1406,7 @@ class HttpOverHttp2Test {
         .build()
     )
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABC")
+    assertThat(response.body.string()).isEqualTo("ABC")
     assertThat(response.protocol).isEqualTo(protocol)
     val logs = testLogHandler.takeAll()
     assertThat(firstFrame(logs, "HEADERS"))
@@ -1605,7 +1428,7 @@ class HttpOverHttp2Test {
         .build()
     )
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABC")
+    assertThat(response.body.string()).isEqualTo("ABC")
     assertThat(response.protocol).isEqualTo(protocol)
     val logs = testLogHandler.takeAll()
     assertThat(firstFrame(logs, "HEADERS"))
@@ -1634,13 +1457,9 @@ class HttpOverHttp2Test {
         .setBodyDelay(750, TimeUnit.MILLISECONDS)
         .setBody("ABC")
     )
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("ABC")
+    assertThat(response.body.string()).isEqualTo("ABC")
     assertThat(response.protocol).isEqualTo(protocol)
 
     // Confirm a single ping was sent and received, and its reply was sent and received.
@@ -1678,11 +1497,7 @@ class HttpOverHttp2Test {
     )
 
     // Make a call. It'll fail as soon as our pings detect a problem.
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val executeAtNanos = System.nanoTime()
     try {
       call.execute()
@@ -1725,11 +1540,7 @@ class HttpOverHttp2Test {
     )
 
     // The first call times out.
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     try {
       call1.execute()
       fail<Any?>()
@@ -1738,11 +1549,7 @@ class HttpOverHttp2Test {
     }
 
     // The second call times out because it uses the same bad connection.
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     try {
       call2.execute()
       fail<Any?>()
@@ -1751,14 +1558,10 @@ class HttpOverHttp2Test {
 
     // But after the degraded pong timeout, that connection is abandoned.
     Thread.sleep(TimeUnit.NANOSECONDS.toMillis(Http2Connection.DEGRADED_PONG_TIMEOUT_NS.toLong()))
-    val call3 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call3 = client.newCall(Request(server.url("/")))
     call3.execute().use { response ->
       assertThat(
-        response.body!!.string()
+        response.body.string()
       ).isEqualTo("fresh connection")
     }
   }
@@ -1784,41 +1587,29 @@ class HttpOverHttp2Test {
     )
 
     // The first call times out.
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     try {
       call1.execute().use { response ->
-        response.body!!.string()
+        response.body.string()
         fail<Any?>()
       }
     } catch (expected: SocketTimeoutException) {
     }
 
     // The second call succeeds.
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     call2.execute().use { response ->
       assertThat(
-        response.body!!.string()
+        response.body.string()
       ).isEqualTo("b")
     }
 
     // Calls succeed after the degraded pong timeout because the degraded pong was received.
     Thread.sleep(TimeUnit.NANOSECONDS.toMillis(Http2Connection.DEGRADED_PONG_TIMEOUT_NS.toLong()))
-    val call3 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call3 = client.newCall(Request(server.url("/")))
     call3.execute().use { response ->
       assertThat(
-        response.body!!.string()
+        response.body.string()
       ).isEqualTo("c")
     }
 
@@ -1859,13 +1650,9 @@ class HttpOverHttp2Test {
 
     // Read & write a full request to confirm settings are accepted.
     server.enqueue(MockResponse().withSettings(settings))
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("")
+    assertThat(response.body.string()).isEqualTo("")
     server.enqueue(
       MockResponse()
         .setBody("ABC")
@@ -1878,27 +1665,15 @@ class HttpOverHttp2Test {
       MockResponse()
         .setBody("GHI")
     )
-    val call1 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = client.newCall(Request(server.url("/")))
     val response1 = call1.execute()
-    val call2 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = client.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    val call3 = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call3 = client.newCall(Request(server.url("/")))
     val response3 = call3.execute()
-    assertThat(response1.body!!.string()).isEqualTo("ABC")
-    assertThat(response2.body!!.string()).isEqualTo("DEF")
-    assertThat(response3.body!!.string()).isEqualTo("GHI")
+    assertThat(response1.body.string()).isEqualTo("ABC")
+    assertThat(response2.body.string()).isEqualTo("DEF")
+    assertThat(response3.body.string()).isEqualTo("GHI")
     // Settings connection.
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
     // Reuse settings connection.
@@ -1932,23 +1707,15 @@ class HttpOverHttp2Test {
         connections.add(connection as RealConnection)
       }
     }).build()
-    val call1 = localClient.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call1 = localClient.newCall(Request(server.url("/")))
     val response1 = call1.execute()
-    assertThat(response1.body!!.string()).isEqualTo("ABC")
+    assertThat(response1.body.string()).isEqualTo("ABC")
 
     // Add delays for DISCONNECT_AT_END to propogate
     waitForConnectionShutdown(connections[0])
-    val call2 = localClient.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call2 = localClient.newCall(Request(server.url("/")))
     val response2 = call2.execute()
-    assertThat(response2.body!!.string()).isEqualTo("DEF")
+    assertThat(response2.body.string()).isEqualTo("DEF")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
   }
@@ -1996,7 +1763,7 @@ class HttpOverHttp2Test {
                 .build()
             )
             val response = call.execute()
-            assertThat(response.body!!.string()).isEqualTo("ABC")
+            assertThat(response.body.string()).isEqualTo("ABC")
             // Wait until the GOAWAY has been processed.
             val connection = chain.connection() as RealConnection?
             while (connection!!.isHealthy(false));
@@ -2005,13 +1772,9 @@ class HttpOverHttp2Test {
         }
       })
       .build()
-    val call = client2.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client2.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("DEF")
+    assertThat(response.body.string()).isEqualTo("DEF")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
   }
@@ -2034,7 +1797,7 @@ class HttpOverHttp2Test {
     val bodies: BlockingQueue<String?> = LinkedBlockingQueue()
     val callback: Callback = object : Callback {
       override fun onResponse(call: Call, response: Response) {
-        bodies.add(response.body!!.string())
+        bodies.add(response.body.string())
         latch.countDown()
       }
 
@@ -2112,7 +1875,7 @@ class HttpOverHttp2Test {
                 .build()
             )
             val response2 = call2.execute()
-            assertThat(response2.body!!.string()).isEqualTo("call2 response")
+            assertThat(response2.body.string()).isEqualTo("call2 response")
           } catch (e: IOException) {
             throw RuntimeException(e)
           }
@@ -2129,13 +1892,9 @@ class HttpOverHttp2Test {
     client = client.newBuilder()
       .proxy(server.toProxyAddress())
       .build()
-    val call1 = client.newCall(
-      Request.Builder()
-        .url("https://android.com/call1")
-        .build()
-    )
+    val call1 = client.newCall(Request("https://android.com/call1".toHttpUrl()))
     val response2 = call1.execute()
-    assertThat(response2.body!!.string()).isEqualTo("call1 response")
+    assertThat(response2.body.string()).isEqualTo("call1 response")
     val call1Connect = server.takeRequest()
     assertThat(call1Connect.method).isEqualTo("CONNECT")
     assertThat(call1Connect.sequenceNumber).isEqualTo(0)
@@ -2166,13 +1925,9 @@ class HttpOverHttp2Test {
       })
       .build()
     server.enqueue(MockResponse())
-    val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .build()
-    )
+    val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
-    assertThat(response.body!!.string()).isEqualTo("")
+    assertThat(response.body.string()).isEqualTo("")
     val recordedRequest = server.takeRequest()
     assertThat(recordedRequest.getHeader(":authority")).isEqualTo("privateobject.com")
   }
@@ -2197,7 +1952,7 @@ class HttpOverHttp2Test {
             .build()
         )
         val response = call.execute()
-        assertThat(response.body!!.string()).isEqualTo("A")
+        assertThat(response.body.string()).isEqualTo("A")
         countDownLatch.countDown()
       } catch (e: Exception) {
         throw RuntimeException(e)
@@ -2249,16 +2004,16 @@ class HttpOverHttp2Test {
     server.enqueue(MockResponse())
     val callReference = AtomicReference<Call?>()
     val call = client.newCall(
-      Request.Builder()
-        .url(server.url("/"))
-        .post(object : RequestBody() {
+      Request(
+        url = server.url("/"),
+        body = object : RequestBody() {
           override fun contentType() = "text/plain; charset=utf-8".toMediaType()
 
           override fun writeTo(sink: BufferedSink) {
             callReference.get()!!.cancel()
           }
-        })
-        .build()
+        },
+      )
     )
     callReference.set(call)
     try {

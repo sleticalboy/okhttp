@@ -65,9 +65,7 @@ class CallKotlinTest(
     server.enqueue(MockResponse().setBody("abc"))
     server.enqueue(MockResponse().setBody("def"))
 
-    val request = Request.Builder()
-        .url(server.url("/"))
-        .build()
+    val request = Request(server.url("/"))
 
     val call = client.newCall(request)
     val response1 = call.execute()
@@ -75,8 +73,8 @@ class CallKotlinTest(
     val cloned = call.clone()
     val response2 = cloned.execute()
 
-    assertThat("abc").isEqualTo(response1.body!!.string())
-    assertThat("def").isEqualTo(response2.body!!.string())
+    assertThat("abc").isEqualTo(response1.body.string())
+    assertThat("def").isEqualTo(response2.body.string())
   }
 
   @Test
@@ -204,24 +202,22 @@ class CallKotlinTest(
         .setSocketPolicy(SocketPolicy.SHUTDOWN_OUTPUT_AT_END))
     server.enqueue(MockResponse().setBody("b"))
 
-    val requestA = Request.Builder()
-        .url(server.url("/"))
-        .build()
+    val requestA = Request(server.url("/"))
     val responseA = client.newCall(requestA).execute()
 
-    assertThat(responseA.body!!.string()).isEqualTo("a")
+    assertThat(responseA.body.string()).isEqualTo("a")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
 
     // Give the socket a chance to become stale.
     connection!!.idleAtNs -= IDLE_CONNECTION_HEALTHY_NS
     Thread.sleep(250)
 
-    val requestB = Request.Builder()
-        .url(server.url("/"))
-        .post("b".toRequestBody("text/plain".toMediaType()))
-        .build()
+    val requestB = Request(
+      url = server.url("/"),
+      body = "b".toRequestBody("text/plain".toMediaType()),
+    )
     val responseB = client.newCall(requestB).execute()
-    assertThat(responseB.body!!.string()).isEqualTo("b")
+    assertThat(responseB.body.string()).isEqualTo("b")
     assertThat(server.takeRequest().sequenceNumber).isEqualTo(0)
   }
 
@@ -238,7 +234,7 @@ class CallKotlinTest(
         .connectTimeout(Duration.ofMillis(100))
         .build()
 
-    val request = Request.Builder().url(server.url("/")).build()
+    val request = Request(server.url("/"))
     try {
       client.newCall(request).execute()
       fail("")
@@ -260,7 +256,7 @@ class CallKotlinTest(
         .dns(DoubleInetAddressDns()) // Two routes so we get two failures.
         .build()
 
-    val request = Request.Builder().url(server.url("/")).build()
+    val request = Request(server.url("/"))
     try {
       client.newCall(request).execute()
       fail("")
@@ -282,10 +278,7 @@ class CallKotlinTest(
     )
     server.enqueue(MockResponse())
 
-    val request = Request.Builder()
-      .url(server.url("/"))
-      .build()
-
+    val request = Request(server.url("/"))
     val call = client.newCall(request)
     val response = call.execute()
 

@@ -88,7 +88,7 @@ class CacheCorruptionTest(
       }
     }
 
-    assertThat(response.body!!.string()).isEqualTo("ABC.1") // cached
+    assertThat(response.body.string()).isEqualTo("ABC.1") // cached
     assertThat(cache.requestCount()).isEqualTo(2)
     assertThat(cache.networkCount()).isEqualTo(1)
     assertThat(cache.hitCount()).isEqualTo(1)
@@ -105,7 +105,7 @@ class CacheCorruptionTest(
       }
     }
 
-    assertThat(response.body!!.string()).isEqualTo("ABC.2") // not cached
+    assertThat(response.body.string()).isEqualTo("ABC.2") // not cached
     assertThat(cache.requestCount()).isEqualTo(2)
     assertThat(cache.networkCount()).isEqualTo(2)
     assertThat(cache.hitCount()).isEqualTo(0)
@@ -119,7 +119,7 @@ class CacheCorruptionTest(
       }
     }
 
-    assertThat(response.body!!.string()).isEqualTo("ABC.2") // not cached
+    assertThat(response.body.string()).isEqualTo("ABC.2") // not cached
     assertThat(cache.requestCount()).isEqualTo(2)
     assertThat(cache.networkCount()).isEqualTo(2)
     assertThat(cache.hitCount()).isEqualTo(0)
@@ -161,9 +161,9 @@ class CacheCorruptionTest(
       )
       .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
       .build()
-    val request: Request = Request.Builder().url(server.url("/")).build()
+    val request: Request = Request(server.url("/"))
     val response1: Response = client.newCall(request).execute()
-    val bodySource = response1.body!!.source()
+    val bodySource = response1.body.source()
     assertThat(bodySource.readUtf8()).isEqualTo("ABC.1")
 
     corruptor()

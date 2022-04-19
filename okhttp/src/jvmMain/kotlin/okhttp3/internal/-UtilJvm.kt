@@ -39,7 +39,6 @@ import okhttp3.OkHttpClient
 import okhttp3.RequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody
-import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.internal.http2.Header
 import okio.Buffer
 import okio.BufferedSource
@@ -50,7 +49,7 @@ val EMPTY_HEADERS: Headers = commonEmptyHeaders
 @JvmField
 val EMPTY_REQUEST: RequestBody = commonEmptyRequestBody
 @JvmField
-val EMPTY_RESPONSE: ResponseBody = EMPTY_BYTE_ARRAY.toResponseBody()
+val EMPTY_RESPONSE: ResponseBody = commonEmptyResponse
 
 actual typealias HttpUrlRepresentation = HttpUrl
 
@@ -222,15 +221,6 @@ fun <T> List<T>.toImmutableList(): List<T> {
 @SafeVarargs
 fun <T> immutableListOf(vararg elements: T): List<T> {
   return Collections.unmodifiableList(listOf(*elements.clone()))
-}
-
-/** Returns an immutable copy of this. */
-internal fun <K, V> Map<K, V>.toImmutableMap(): Map<K, V> {
-  return if (isEmpty()) {
-    emptyMap()
-  } else {
-    Collections.unmodifiableMap(LinkedHashMap(this))
-  }
 }
 
 /** Closes this, ignoring any checked exceptions. */
