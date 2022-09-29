@@ -49,6 +49,7 @@ import mockwebserver3.MockWebServer
 import mockwebserver3.QueueDispatcher
 import mockwebserver3.RecordedRequest
 import mockwebserver3.SocketPolicy
+import mockwebserver3.junit5.internal.MockWebServerInstance
 import okhttp3.CallEvent.CallEnd
 import okhttp3.CallEvent.ConnectStart
 import okhttp3.CallEvent.ConnectionAcquired
@@ -94,12 +95,10 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.RegisterExtension
+import org.junitpioneer.jupiter.RetryingTest
 
 @Timeout(30)
-open class CallTest(
-  private val server: MockWebServer,
-  private val server2: MockWebServer
-) {
+open class CallTest {
   private val fileSystem = FakeFileSystem()
 
   @RegisterExtension
@@ -110,6 +109,9 @@ open class CallTest(
 
   @RegisterExtension
   val testLogHandler = TestLogHandler(OkHttpClient::class.java)
+
+  private lateinit var server: MockWebServer
+  private lateinit var server2: MockWebServer
 
   private var listener = RecordingEventListener()
   private val handshakeCertificates = localhost()
@@ -123,7 +125,13 @@ open class CallTest(
     fileSystem = LoggingFilesystem(fileSystem)
   )
 
-  @BeforeEach fun setUp() {
+  @BeforeEach fun setUp(
+    server: MockWebServer,
+    @MockWebServerInstance("server2") server2: MockWebServer
+  ) {
+    this.server = server
+    this.server2 = server2
+
     platform.assumeNotOpenJSSE()
     platform.assumeNotBouncyCastle()
   }
@@ -1126,7 +1134,9 @@ open class CallTest(
       )
   }
 
-  @Test fun recoverWhenRetryOnConnectionFailureIsFalse_HTTP2() {
+  @RetryingTest(5)
+  @Flaky
+  fun recoverWhenRetryOnConnectionFailureIsFalse_HTTP2() {
     enableProtocol(Protocol.HTTP_2)
     noRecoverWhenRetryOnConnectionFailureIsFalse()
   }
@@ -1291,7 +1301,7 @@ open class CallTest(
     val serverCertificates = HandshakeCertificates.Builder()
       .build()
     server.useHttps(
-        socketFactoryWithCipherSuite(serverCertificates.sslSocketFactory(), cipherSuite)
+      socketFactoryWithCipherSuite(serverCertificates.sslSocketFactory(), cipherSuite)
     )
     executeSynchronously("/")
       .assertFailure(SSLHandshakeException::class.java)
@@ -3917,8 +3927,10 @@ open class CallTest(
         .addHeader("Test", "Redirect from /a to /b")
         .setBody("/a has moved!")
     )
-    server.enqueue(MockResponse()
-      .setBody("this is the redirect target"))
+    server.enqueue(
+      MockResponse()
+        .setBody("this is the redirect target")
+    )
 
     val call = client.newCall(Request(server.url("/")))
     val response = call.execute()
