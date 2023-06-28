@@ -15,6 +15,7 @@
  */
 package okhttp3
 
+import android.annotation.SuppressLint
 import java.net.Proxy
 import java.net.ProxySelector
 import java.net.Socket
@@ -44,6 +45,7 @@ import okhttp3.internal.toImmutableList
 import okhttp3.internal.ws.RealWebSocket
 import okio.Sink
 import okio.Source
+import kotlin.time.Duration as KotlinDuration
 import org.codehaus.mojo.animal_sniffer.IgnoreJRERequirement
 
 /**
@@ -512,7 +514,7 @@ open class OkHttpClient internal constructor(
     internal val networkInterceptors: MutableList<Interceptor> = mutableListOf()
     internal var eventListenerFactory: EventListener.Factory = EventListener.NONE.asFactory()
     internal var retryOnConnectionFailure = true
-    internal var fastFallback = false
+    internal var fastFallback = true
     internal var authenticator: Authenticator = Authenticator.NONE
     internal var followRedirects = true
     internal var followSslRedirects = true
@@ -669,6 +671,8 @@ open class OkHttpClient internal constructor(
      * This implements Happy Eyeballs ([RFC 6555][rfc_6555]), balancing connect latency vs.
      * wasted resources.
      *
+     * Defaults to enabled, call with [fastFallback] = false to revert to 4.x behaviour.
+     *
      * [rfc_6555]: https://datatracker.ietf.org/doc/html/rfc6555
      */
     fun fastFallback(fastFallback: Boolean) = apply {
@@ -713,6 +717,10 @@ open class OkHttpClient internal constructor(
     /** Sets the response cache to be used to read and write cached responses. */
     fun cache(cache: Cache?) = apply {
       this.cache = cache
+    }
+
+    internal fun taskRunner(taskRunner: TaskRunner) = apply {
+      this.taskRunner = taskRunner
     }
 
     /**
@@ -991,9 +999,24 @@ open class OkHttpClient internal constructor(
      *
      * The default value is 0 which imposes no timeout.
      */
+    @SuppressLint("NewApi")
     @IgnoreJRERequirement
     fun callTimeout(duration: Duration) = apply {
       callTimeout(duration.toMillis(), MILLISECONDS)
+    }
+
+    /**
+     * Sets the default timeout for complete calls. A value of 0 means no timeout, otherwise values
+     * must be between 1 and [Integer.MAX_VALUE] when converted to milliseconds.
+     *
+     * The call timeout spans the entire call: resolving DNS, connecting, writing the request body,
+     * server processing, and reading the response body. If the call requires redirects or retries
+     * all must complete within one timeout period.
+     *
+     * The default value is 0 which imposes no timeout.
+     */
+    fun callTimeout(duration: KotlinDuration) = apply {
+      callTimeout = checkDuration("duration", duration)
     }
 
     /**
@@ -1014,9 +1037,21 @@ open class OkHttpClient internal constructor(
      * The connect timeout is applied when connecting a TCP socket to the target host. The default
      * value is 10 seconds.
      */
+    @SuppressLint("NewApi")
     @IgnoreJRERequirement
     fun connectTimeout(duration: Duration) = apply {
       connectTimeout(duration.toMillis(), MILLISECONDS)
+    }
+
+    /**
+     * Sets the default connect timeout for new connections. A value of 0 means no timeout,
+     * otherwise values must be between 1 and [Integer.MAX_VALUE] when converted to milliseconds.
+     *
+     * The connect timeout is applied when connecting a TCP socket to the target host. The default
+     * value is 10 seconds.
+     */
+    fun connectTimeout(duration: KotlinDuration) = apply {
+      connectTimeout = checkDuration("duration", duration)
     }
 
     /**
@@ -1043,9 +1078,24 @@ open class OkHttpClient internal constructor(
      * @see Socket.setSoTimeout
      * @see Source.timeout
      */
+    @SuppressLint("NewApi")
     @IgnoreJRERequirement
     fun readTimeout(duration: Duration) = apply {
       readTimeout(duration.toMillis(), MILLISECONDS)
+    }
+
+    /**
+     * Sets the default read timeout for new connections. A value of 0 means no timeout, otherwise
+     * values must be between 1 and [Integer.MAX_VALUE] when converted to milliseconds.
+     *
+     * The read timeout is applied to both the TCP socket and for individual read IO operations
+     * including on [Source] of the [Response]. The default value is 10 seconds.
+     *
+     * @see Socket.setSoTimeout
+     * @see Source.timeout
+     */
+    fun readTimeout(duration: KotlinDuration) = apply {
+      readTimeout = checkDuration("duration", duration)
     }
 
     /**
@@ -1070,9 +1120,23 @@ open class OkHttpClient internal constructor(
      *
      * @see Sink.timeout
      */
+    @SuppressLint("NewApi")
     @IgnoreJRERequirement
     fun writeTimeout(duration: Duration) = apply {
       writeTimeout(duration.toMillis(), MILLISECONDS)
+    }
+
+    /**
+     * Sets the default write timeout for new connections. A value of 0 means no timeout, otherwise
+     * values must be between 1 and [Integer.MAX_VALUE] when converted to milliseconds.
+     *
+     * The write timeout is applied for individual write IO operations. The default value is 10
+     * seconds.
+     *
+     * @see Sink.timeout
+     */
+    fun writeTimeout(duration: KotlinDuration) = apply {
+      writeTimeout = checkDuration("duration", duration)
     }
 
     /**
@@ -1105,9 +1169,27 @@ open class OkHttpClient internal constructor(
      *
      * The default value of 0 disables client-initiated pings.
      */
+    @SuppressLint("NewApi")
     @IgnoreJRERequirement
     fun pingInterval(duration: Duration) = apply {
       pingInterval(duration.toMillis(), MILLISECONDS)
+    }
+
+    /**
+     * Sets the interval between HTTP/2 and web socket pings initiated by this client. Use this to
+     * automatically send ping frames until either the connection fails or it is closed. This keeps
+     * the connection alive and may detect connectivity failures.
+     *
+     * If the server does not respond to each ping with a pong within `interval`, this client will
+     * assume that connectivity has been lost. When this happens on a web socket the connection is
+     * canceled and its listener is [notified][WebSocketListener.onFailure]. When it happens on an
+     * HTTP/2 connection the connection is closed and any calls it is carrying
+     * [will fail with an IOException][java.io.IOException].
+     *
+     * The default value of 0 disables client-initiated pings.
+     */
+    fun pingInterval(duration: KotlinDuration) = apply {
+      pingInterval = checkDuration("duration", duration)
     }
 
     /**

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
 package okhttp3.logging
 
 import java.io.IOException
@@ -23,7 +24,7 @@ import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
-import okhttp3.internal.charset
+import okhttp3.internal.charsetOrUtf8
 import okhttp3.internal.http.promisesBody
 import okhttp3.internal.platform.Platform
 import okhttp3.logging.internal.isProbablyUtf8
@@ -211,7 +212,7 @@ class HttpLoggingInterceptor @JvmOverloads constructor(
           }
         }
 
-        val charset: Charset = requestBody.contentType().charset()
+        val charset: Charset = requestBody.contentType().charsetOrUtf8()
 
         logger.log("")
         if (!buffer.isProbablyUtf8()) {
@@ -254,6 +255,8 @@ class HttpLoggingInterceptor @JvmOverloads constructor(
         logger.log("<-- END HTTP")
       } else if (bodyHasUnknownEncoding(response.headers)) {
         logger.log("<-- END HTTP (encoded body omitted)")
+      } else if (bodyIsStreaming(response)) {
+        logger.log("<-- END HTTP (streaming)")
       } else {
         val source = responseBody.source()
         source.request(Long.MAX_VALUE) // Buffer the entire body.
@@ -268,7 +271,7 @@ class HttpLoggingInterceptor @JvmOverloads constructor(
           }
         }
 
-        val charset: Charset = responseBody.contentType().charset()
+        val charset: Charset = responseBody.contentType().charsetOrUtf8()
 
         if (!buffer.isProbablyUtf8()) {
           logger.log("")
@@ -301,5 +304,10 @@ class HttpLoggingInterceptor @JvmOverloads constructor(
     val contentEncoding = headers["Content-Encoding"] ?: return false
     return !contentEncoding.equals("identity", ignoreCase = true) &&
         !contentEncoding.equals("gzip", ignoreCase = true)
+  }
+
+  private fun bodyIsStreaming(response: Response): Boolean {
+    val contentType = response.body.contentType()
+    return contentType != null && contentType.type == "text" && contentType.subtype == "event-stream"
   }
 }

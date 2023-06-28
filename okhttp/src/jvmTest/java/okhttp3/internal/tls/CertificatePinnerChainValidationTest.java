@@ -15,21 +15,9 @@
  */
 package okhttp3.internal.tls;
 
-import java.security.GeneralSecurityException;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
-import java.util.Collections;
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLHandshakeException;
-import javax.net.ssl.SSLPeerUnverifiedException;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509KeyManager;
-import javax.net.ssl.X509TrustManager;
 import mockwebserver3.MockResponse;
 import mockwebserver3.MockWebServer;
-import mockwebserver3.SocketPolicy;
+import mockwebserver3.SocketPolicy.DisconnectAtEnd;
 import okhttp3.Call;
 import okhttp3.CertificatePinner;
 import okhttp3.OkHttpClient;
@@ -44,6 +32,19 @@ import okhttp3.tls.HeldCertificate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLPeerUnverifiedException;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509KeyManager;
+import javax.net.ssl.X509TrustManager;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.util.Collections;
 
 import static okhttp3.tls.internal.TlsUtil.newKeyManager;
 import static okhttp3.tls.internal.TlsUtil.newTrustManager;
@@ -101,8 +102,9 @@ public final class CertificatePinnerChainValidationTest {
     server.useHttps(serverHandshakeCertificates.sslSocketFactory());
 
     // The request should complete successfully.
-    server.enqueue(new MockResponse()
-        .setBody("abc"));
+    server.enqueue(new MockResponse.Builder()
+        .body("abc")
+        .build());
     Call call1 = client.newCall(new Request.Builder()
         .url(server.url("/"))
         .build());
@@ -149,9 +151,10 @@ public final class CertificatePinnerChainValidationTest {
     server.useHttps(serverHandshakeCertificates.sslSocketFactory());
 
     // The request should complete successfully.
-    server.enqueue(new MockResponse()
-        .setBody("abc")
-        .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END));
+    server.enqueue(new MockResponse.Builder()
+        .body("abc")
+        .socketPolicy(DisconnectAtEnd.INSTANCE)
+        .build());
     Call call1 = client.newCall(new Request.Builder()
         .url(server.url("/"))
         .build());
@@ -163,9 +166,10 @@ public final class CertificatePinnerChainValidationTest {
     client.connectionPool().evictAll();
 
     // Confirm that a second request also succeeds. This should detect caching problems.
-    server.enqueue(new MockResponse()
-        .setBody("def")
-        .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END));
+    server.enqueue(new MockResponse.Builder()
+        .body("def")
+        .socketPolicy(DisconnectAtEnd.INSTANCE)
+        .build());
     Call call2 = client.newCall(new Request.Builder()
         .url(server.url("/"))
         .build());
@@ -178,6 +182,7 @@ public final class CertificatePinnerChainValidationTest {
     // https://github.com/square/okhttp/issues/4729
     platform.expectFailureOnConscryptPlatform();
     platform.expectFailureOnCorrettoPlatform();
+    platform.expectFailureOnLoomPlatform();
 
     // Start with a trusted root CA certificate.
     HeldCertificate rootCa = new HeldCertificate.Builder()
@@ -233,9 +238,10 @@ public final class CertificatePinnerChainValidationTest {
         compromisedIntermediateCa.certificate(), goodCertificate.certificate());
 
     server.useHttps(socketFactory);
-    server.enqueue(new MockResponse()
-        .setBody("abc")
-        .addHeader("Content-Type: text/plain"));
+    server.enqueue(new MockResponse.Builder()
+        .body("abc")
+        .addHeader("Content-Type: text/plain")
+        .build());
 
     // Make a request from client to server. It should succeed certificate checks (unfortunately the
     // rogue CA is trusted) but it should fail certificate pinning.
@@ -257,6 +263,7 @@ public final class CertificatePinnerChainValidationTest {
     // https://github.com/square/okhttp/issues/4729
     platform.expectFailureOnConscryptPlatform();
     platform.expectFailureOnCorrettoPlatform();
+    platform.expectFailureOnLoomPlatform();
 
     // Start with two root CA certificates, one is good and the other is compromised.
     HeldCertificate rootCa = new HeldCertificate.Builder()
@@ -312,9 +319,10 @@ public final class CertificatePinnerChainValidationTest {
     SSLSocketFactory socketFactory = newServerSocketFactory(rogueCertificate,
         goodIntermediateCa.certificate(), compromisedIntermediateCa.certificate());
     server.useHttps(socketFactory);
-    server.enqueue(new MockResponse()
-        .setBody("abc")
-        .addHeader("Content-Type: text/plain"));
+    server.enqueue(new MockResponse.Builder()
+        .body("abc")
+        .addHeader("Content-Type: text/plain")
+        .build());
 
     // Make a request from client to server. It should succeed certificate checks (unfortunately the
     // rogue CA is trusted) but it should fail certificate pinning.
@@ -595,8 +603,9 @@ public final class CertificatePinnerChainValidationTest {
     server.useHttps(serverHandshakeCertificates.sslSocketFactory());
 
     // The request should complete successfully.
-    server.enqueue(new MockResponse()
-        .setBody("abc"));
+    server.enqueue(new MockResponse.Builder()
+        .body("abc")
+        .build());
     Call call1 = client.newCall(new Request.Builder()
         .url(server.url("/"))
         .build());

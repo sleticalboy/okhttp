@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junitpioneer.jupiter.RetryingTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -56,9 +57,11 @@ public final class EventSourceHttpTest {
   }
 
   @Test public void event() {
-    server.enqueue(new MockResponse().setBody(""
-        + "data: hey\n"
-        + "\n").setHeader("content-type", "text/event-stream"));
+    server.enqueue(new MockResponse.Builder()
+        .body(""
+            + "data: hey\n"
+            + "\n").setHeader("content-type", "text/event-stream")
+        .build());
 
     EventSource source = newEventSource();
 
@@ -69,10 +72,13 @@ public final class EventSourceHttpTest {
     listener.assertClose();
   }
 
-  @Test public void cancelInEventShortCircuits() throws IOException {
-    server.enqueue(new MockResponse().setBody(""
-      + "data: hey\n"
-      + "\n").setHeader("content-type", "text/event-stream"));
+  @RetryingTest(5)
+  public void cancelInEventShortCircuits() throws IOException {
+    server.enqueue(new MockResponse.Builder()
+        .body(""
+            + "data: hey\n"
+            + "\n").setHeader("content-type", "text/event-stream")
+        .build());
     listener.enqueueCancel(); // Will cancel in onOpen().
 
     newEventSource();
@@ -81,18 +87,24 @@ public final class EventSourceHttpTest {
   }
 
   @Test public void badContentType() {
-    server.enqueue(new MockResponse().setBody(""
-        + "data: hey\n"
-        + "\n").setHeader("content-type", "text/plain"));
+    server.enqueue(new MockResponse.Builder()
+        .body(""
+            + "data: hey\n"
+            + "\n").setHeader("content-type", "text/plain")
+        .build());
 
     newEventSource();
     listener.assertFailure("Invalid content-type: text/plain");
   }
 
   @Test public void badResponseCode() {
-    server.enqueue(new MockResponse().setBody(""
-        + "data: hey\n"
-        + "\n").setHeader("content-type", "text/event-stream").setResponseCode(401));
+    server.enqueue(new MockResponse.Builder()
+        .body(""
+          + "data: hey\n"
+          + "\n")
+        .setHeader("content-type", "text/event-stream")
+        .code(401)
+        .build());
 
     newEventSource();
     listener.assertFailure(null);
@@ -103,10 +115,11 @@ public final class EventSourceHttpTest {
         .callTimeout(250, TimeUnit.MILLISECONDS)
         .build();
 
-    server.enqueue(new MockResponse()
-        .setBodyDelay(500, TimeUnit.MILLISECONDS)
+    server.enqueue(new MockResponse.Builder()
+        .bodyDelay(500, TimeUnit.MILLISECONDS)
         .setHeader("content-type", "text/event-stream")
-        .setBody("data: hey\n\n"));
+        .body("data: hey\n\n")
+        .build());
 
     EventSource source = newEventSource();
 
@@ -122,19 +135,22 @@ public final class EventSourceHttpTest {
         .callTimeout(250, TimeUnit.MILLISECONDS)
         .build();
 
-    server.enqueue(new MockResponse()
-        .setHeadersDelay(500, TimeUnit.MILLISECONDS)
+    server.enqueue(new MockResponse.Builder()
+        .headersDelay(500, TimeUnit.MILLISECONDS)
         .setHeader("content-type", "text/event-stream")
-        .setBody("data: hey\n\n"));
+        .body("data: hey\n\n")
+        .build());
 
     newEventSource();
     listener.assertFailure("timeout");
   }
 
   @Test public void retainsAccept() throws InterruptedException {
-    server.enqueue(new MockResponse().setBody(""
-        + "data: hey\n"
-        + "\n").setHeader("content-type", "text/event-stream"));
+    server.enqueue(new MockResponse.Builder()
+        .body(""
+            + "data: hey\n"
+            + "\n").setHeader("content-type", "text/event-stream")
+        .build());
 
     EventSource source = newEventSource("text/plain");
 
@@ -142,13 +158,15 @@ public final class EventSourceHttpTest {
     listener.assertEvent(null, null, "hey");
     listener.assertClose();
 
-    assertThat(server.takeRequest().getHeader("Accept")).isEqualTo("text/plain");
+    assertThat(server.takeRequest().getHeaders().get("Accept")).isEqualTo("text/plain");
   }
 
   @Test public void setsMissingAccept() throws InterruptedException {
-    server.enqueue(new MockResponse().setBody(""
-        + "data: hey\n"
-        + "\n").setHeader("content-type", "text/event-stream"));
+    server.enqueue(new MockResponse.Builder()
+        .body(""
+            + "data: hey\n"
+            + "\n").setHeader("content-type", "text/event-stream")
+        .build());
 
     EventSource source = newEventSource();
 
@@ -156,7 +174,7 @@ public final class EventSourceHttpTest {
     listener.assertEvent(null, null, "hey");
     listener.assertClose();
 
-    assertThat(server.takeRequest().getHeader("Accept")).isEqualTo("text/event-stream");
+    assertThat(server.takeRequest().getHeaders().get("Accept")).isEqualTo("text/event-stream");
   }
 
   private EventSource newEventSource() {

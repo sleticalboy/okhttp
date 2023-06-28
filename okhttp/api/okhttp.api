@@ -359,9 +359,27 @@ public abstract interface class okhttp3/Connection {
 	public abstract fun socket ()Ljava/net/Socket;
 }
 
+public abstract class okhttp3/ConnectionListener {
+	public static final field Companion Lokhttp3/ConnectionListener$Companion;
+	public fun <init> ()V
+	public fun connectEnd (Lokhttp3/Connection;Lokhttp3/Route;Lokhttp3/Call;)V
+	public fun connectFailed (Lokhttp3/Route;Lokhttp3/Call;Ljava/io/IOException;)V
+	public fun connectStart (Lokhttp3/Route;Lokhttp3/Call;)V
+	public fun connectionAcquired (Lokhttp3/Connection;Lokhttp3/Call;)V
+	public fun connectionClosed (Lokhttp3/Connection;)V
+	public fun connectionReleased (Lokhttp3/Connection;Lokhttp3/Call;)V
+	public fun noNewExchanges (Lokhttp3/Connection;)V
+}
+
+public final class okhttp3/ConnectionListener$Companion {
+	public final fun getNONE ()Lokhttp3/ConnectionListener;
+}
+
 public final class okhttp3/ConnectionPool {
 	public fun <init> ()V
 	public fun <init> (IJLjava/util/concurrent/TimeUnit;)V
+	public fun <init> (IJLjava/util/concurrent/TimeUnit;Lokhttp3/ConnectionListener;)V
+	public synthetic fun <init> (IJLjava/util/concurrent/TimeUnit;Lokhttp3/ConnectionListener;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun connectionCount ()I
 	public final fun evictAll ()V
 	public final fun idleConnectionCount ()I
@@ -693,7 +711,6 @@ public final class okhttp3/HttpUrl {
 }
 
 public final class okhttp3/HttpUrl$Builder {
-	public static final field Companion Lokhttp3/HttpUrl$Builder$Companion;
 	public fun <init> ()V
 	public final fun addEncodedPathSegment (Ljava/lang/String;)Lokhttp3/HttpUrl$Builder;
 	public final fun addEncodedPathSegments (Ljava/lang/String;)Lokhttp3/HttpUrl$Builder;
@@ -722,9 +739,6 @@ public final class okhttp3/HttpUrl$Builder {
 	public final fun setQueryParameter (Ljava/lang/String;Ljava/lang/String;)Lokhttp3/HttpUrl$Builder;
 	public fun toString ()Ljava/lang/String;
 	public final fun username (Ljava/lang/String;)Lokhttp3/HttpUrl$Builder;
-}
-
-public final class okhttp3/HttpUrl$Builder$Companion {
 }
 
 public final class okhttp3/HttpUrl$Companion {
@@ -937,9 +951,11 @@ public final class okhttp3/OkHttpClient$Builder {
 	public final fun cache (Lokhttp3/Cache;)Lokhttp3/OkHttpClient$Builder;
 	public final fun callTimeout (JLjava/util/concurrent/TimeUnit;)Lokhttp3/OkHttpClient$Builder;
 	public final fun callTimeout (Ljava/time/Duration;)Lokhttp3/OkHttpClient$Builder;
+	public final fun callTimeout-LRDsOJo (J)Lokhttp3/OkHttpClient$Builder;
 	public final fun certificatePinner (Lokhttp3/CertificatePinner;)Lokhttp3/OkHttpClient$Builder;
 	public final fun connectTimeout (JLjava/util/concurrent/TimeUnit;)Lokhttp3/OkHttpClient$Builder;
 	public final fun connectTimeout (Ljava/time/Duration;)Lokhttp3/OkHttpClient$Builder;
+	public final fun connectTimeout-LRDsOJo (J)Lokhttp3/OkHttpClient$Builder;
 	public final fun connectionPool (Lokhttp3/ConnectionPool;)Lokhttp3/OkHttpClient$Builder;
 	public final fun connectionSpecs (Ljava/util/List;)Lokhttp3/OkHttpClient$Builder;
 	public final fun cookieJar (Lokhttp3/CookieJar;)Lokhttp3/OkHttpClient$Builder;
@@ -956,18 +972,21 @@ public final class okhttp3/OkHttpClient$Builder {
 	public final fun networkInterceptors ()Ljava/util/List;
 	public final fun pingInterval (JLjava/util/concurrent/TimeUnit;)Lokhttp3/OkHttpClient$Builder;
 	public final fun pingInterval (Ljava/time/Duration;)Lokhttp3/OkHttpClient$Builder;
+	public final fun pingInterval-LRDsOJo (J)Lokhttp3/OkHttpClient$Builder;
 	public final fun protocols (Ljava/util/List;)Lokhttp3/OkHttpClient$Builder;
 	public final fun proxy (Ljava/net/Proxy;)Lokhttp3/OkHttpClient$Builder;
 	public final fun proxyAuthenticator (Lokhttp3/Authenticator;)Lokhttp3/OkHttpClient$Builder;
 	public final fun proxySelector (Ljava/net/ProxySelector;)Lokhttp3/OkHttpClient$Builder;
 	public final fun readTimeout (JLjava/util/concurrent/TimeUnit;)Lokhttp3/OkHttpClient$Builder;
 	public final fun readTimeout (Ljava/time/Duration;)Lokhttp3/OkHttpClient$Builder;
+	public final fun readTimeout-LRDsOJo (J)Lokhttp3/OkHttpClient$Builder;
 	public final fun retryOnConnectionFailure (Z)Lokhttp3/OkHttpClient$Builder;
 	public final fun socketFactory (Ljavax/net/SocketFactory;)Lokhttp3/OkHttpClient$Builder;
 	public final fun sslSocketFactory (Ljavax/net/ssl/SSLSocketFactory;)Lokhttp3/OkHttpClient$Builder;
 	public final fun sslSocketFactory (Ljavax/net/ssl/SSLSocketFactory;Ljavax/net/ssl/X509TrustManager;)Lokhttp3/OkHttpClient$Builder;
 	public final fun writeTimeout (JLjava/util/concurrent/TimeUnit;)Lokhttp3/OkHttpClient$Builder;
 	public final fun writeTimeout (Ljava/time/Duration;)Lokhttp3/OkHttpClient$Builder;
+	public final fun writeTimeout-LRDsOJo (J)Lokhttp3/OkHttpClient$Builder;
 }
 
 public final class okhttp3/OkHttpClient$Companion {

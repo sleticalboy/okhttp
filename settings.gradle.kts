@@ -9,15 +9,15 @@ project(":mockwebserver-junit4").name = "mockwebserver3-junit4"
 include(":mockwebserver-junit5")
 project(":mockwebserver-junit5").name = "mockwebserver3-junit5"
 
-val androidBuild: String? by settings
-val graalBuild: String? by settings
+val androidBuild: String by settings
+val graalBuild: String by settings
+val loomBuild: String by settings
 
-if (androidBuild != null) {
-  include(":android-test")
+if (androidBuild.toBoolean()) {
   include(":regression-test")
 }
 
-if (graalBuild != null) {
+if (graalBuild.toBoolean()) {
   include(":native-image-tests")
 }
 
@@ -28,6 +28,7 @@ include(":okhttp-bom")
 include(":okhttp-brotli")
 include(":okhttp-dnsoverhttps")
 include(":okhttp-hpacktests")
+include(":okhttp-idna-mapping-table")
 include(":okhttp-logging-interceptor")
 project(":okhttp-logging-interceptor").name = "logging-interceptor"
 include(":okhttp-sse")
@@ -43,5 +44,6 @@ include(":samples:slack")
 include(":samples:static-server")
 include(":samples:tlssurvey")
 include(":samples:unixdomainsockets")
+include(":android-test")
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")

@@ -43,6 +43,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: gradle/wrapper-validation-action@v1
+      - name: Validate Renovate
+        uses: rinchsan/renovate-config-validator@v0.0.12
+        with:
+          pattern: '.github/renovate.json'
 
   checkjdk11:
     permissions:
@@ -64,13 +68,7 @@ jobs:
       - name: Run Checks
         uses: gradle/gradle-build-action@v2
         with:
-          arguments: check -x test
-
-      - name: Publish Test Report
-        if: github.repository == 'square/okhttp' && github.ref == 'refs/heads/master'
-        uses: mikepenz/action-junit-report@v3
-        with:
-          report_paths: '**/build/test-results/*/TEST-*.xml'
+          arguments: check -PandroidBuild=true -PgraalBuild=true -x test -x jvmTest -x jsTest
 
   testopenjdk11:
     permissions:
@@ -99,6 +97,7 @@ jobs:
         uses: mikepenz/action-junit-report@v3
         with:
           report_paths: '**/build/test-results/*/TEST-*.xml'
+          check_name: OpenJDK 11 Test Report
 
   testjs:
     permissions:
@@ -127,6 +126,7 @@ jobs:
         uses: mikepenz/action-junit-report@v3
         with:
           report_paths: '**/build/test-results/test/TEST-*.xml'
+          check_name: JS Test Report
 
   testzulu11:
     runs-on: ubuntu-latest
@@ -151,7 +151,7 @@ jobs:
 
   testopenjdk8:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdk8')
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdkversions') || contains(github.event.pull_request.labels.*.name, 'renovate')
 
     steps:
       - name: Checkout
@@ -172,7 +172,7 @@ jobs:
 
   testopenjdk8alpn:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdk8')
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdkversions')
 
     steps:
       - name: Checkout
@@ -220,7 +220,7 @@ jobs:
 
   testconscrypt:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'providers')
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'conscrypt')
 
     steps:
       - name: Checkout
@@ -284,7 +284,8 @@ jobs:
 
   testopenjdk17:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdk17')
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdkversions') || contains(github.event.pull_request.labels.*.name, 'renovate')
+
 
     steps:
       - name: Checkout
@@ -302,6 +303,34 @@ jobs:
         uses: gradle/gradle-build-action@v2
         with:
           arguments: jvmTest -Dtest.java.version=17
+
+  testopenjdk19:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'jdkversions') || contains(github.event.pull_request.labels.*.name, 'renovate')
+
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Configure JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 19
+
+      - name: Configure JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 11
+
+      - name: Run Checks
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: jvmTest -Dtest.java.version=19
 
   testwindows:
     runs-on: windows-latest
@@ -344,17 +373,13 @@ jobs:
 
       - name: Build okcurl
         uses: gradle/gradle-build-action@v2
-        env:
-          USE_NATIVE_IMAGE_JAVA_PLATFORM_MODULE_SYSTEM: false
         with:
           arguments: okcurl:nativeImage
 
       - name: Build ConsoleLauncher
         uses: gradle/gradle-build-action@v2
-        env:
-          USE_NATIVE_IMAGE_JAVA_PLATFORM_MODULE_SYSTEM: false
         with:
-          arguments: -PgraalBuild native-image-tests:nativeImage
+          arguments: -PgraalBuild=true native-image-tests:nativeImage
 
       - name: Run Checks
         run: ./native-image-tests/build/graal/ConsoleLauncher
@@ -362,7 +387,7 @@ jobs:
   testandroid:
     runs-on: macos-latest
     timeout-minutes: 30
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'android')
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'android') || contains(github.event.pull_request.labels.*.name, 'renovate')
 
     strategy:
       fail-fast: false
@@ -385,6 +410,8 @@ jobs:
 
       - name: Gradle cache
         uses: gradle/gradle-build-action@v2
+        with:
+          arguments: -PandroidBuild=true :okhttp-android:test
 
       - name: AVD cache
         uses: actions/cache@v3
@@ -409,9 +436,36 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api-level }}
-          script: ./gradlew -PandroidBuild :okhttp-android:connectedCheck :android-test:connectedCheck
+          script: ./gradlew -PandroidBuild=true :okhttp-android:connectedCheck :android-test:connectedCheck
         env:
           API_LEVEL: ${{ matrix.api-level }}
+
+  testloom:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'loom')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Configure JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 19
+
+      - name: Configure JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: 11
+
+      - name: Run Checks
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: jvmTest -Dokhttp.platform=loom -Dtest.java.version=19
 
 
   testandroidregression:
@@ -463,6 +517,6 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api-level }}
-          script: ./gradlew -PandroidBuild :regression-test:connectedCheck
+          script: ./gradlew -PandroidBuild=true :regression-test:connectedCheck
         env:
           API_LEVEL: ${{ matrix.api-level }}
