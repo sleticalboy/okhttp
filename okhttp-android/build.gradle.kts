@@ -1,3 +1,6 @@
+@file:SuppressLint("OldTargetApi")
+
+import android.annotation.SuppressLint
 import com.vanniktech.maven.publish.JavadocJar
 
 plugins {
@@ -9,11 +12,12 @@ plugins {
 }
 
 android {
-  compileSdk = 33
+  compileSdk = 34
+
+  namespace = "okhttp.android"
 
   defaultConfig {
     minSdk = 21
-    targetSdk = 33
 
     // Make sure to use the AndroidJUnitRunner (or a sub-class) in order to hook in the JUnit 5 Test Builder
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -26,6 +30,8 @@ android {
       unitTests {
         isIncludeAndroidResources = true
       }
+
+      targetSdk = 34
     }
   }
 
@@ -42,6 +48,7 @@ android {
 dependencies {
   api(libs.squareup.okio)
   api(projects.okhttp)
+  api(projects.loggingInterceptor)
   compileOnly(libs.androidx.annotation)
   compileOnly(libs.findbugs.jsr305)
   debugImplementation(libs.androidx.annotation)
@@ -51,7 +58,7 @@ dependencies {
 
   testImplementation(libs.junit)
   testImplementation(libs.junit.ktx)
-  testImplementation(libs.assertj.core)
+  testImplementation(libs.assertk)
   testImplementation(projects.okhttpTls)
   testImplementation(libs.androidx.test.runner)
   testImplementation(libs.robolectric)
@@ -59,7 +66,7 @@ dependencies {
   testImplementation(libs.squareup.okio.fakefilesystem)
 
   androidTestImplementation(projects.okhttpTls)
-  androidTestImplementation(libs.assertj.core)
+  androidTestImplementation(libs.assertk)
   androidTestImplementation(projects.mockwebserver3Junit4)
   androidTestImplementation(libs.androidx.test.runner)
 }

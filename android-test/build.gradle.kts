@@ -9,17 +9,19 @@ plugins {
 val androidBuild = property("androidBuild").toString().toBoolean()
 
 android {
-  compileSdk = 33
+  compileSdk = 34
+
+  namespace = "okhttp.android.test"
 
   defaultConfig {
     minSdk = 21
-    targetSdk = 33
 
     // Make sure to use the AndroidJUnitRunner (or a sub-class) in order to hook in the JUnit 5 Test Builder
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     testInstrumentationRunnerArguments += mapOf(
       "runnerBuilder" to "de.mannodermaus.junit5.AndroidJUnit5Builder",
-      "notPackage" to "org.bouncycastle"
+      "notPackage" to "org.bouncycastle",
+      "configurationParameters" to "junit.jupiter.extensions.autodetection.enabled=true"
     )
   }
 
@@ -35,6 +37,10 @@ android {
   compileOptions {
     targetCompatibility(JavaVersion.VERSION_11)
     sourceCompatibility(JavaVersion.VERSION_11)
+  }
+
+  testOptions {
+    targetSdk = 34
   }
 
   kotlinOptions {
@@ -62,6 +68,7 @@ dependencies {
     exclude("org.conscrypt", "conscrypt-openjdk-uber")
     exclude("software.amazon.cryptools", "AmazonCorrettoCryptoProvider")
   }
+  androidTestImplementation(libs.assertk)
   androidTestImplementation(libs.bouncycastle.bcprov)
   androidTestImplementation(libs.bouncycastle.bctls)
   androidTestImplementation(libs.conscrypt.android)
@@ -75,6 +82,8 @@ dependencies {
   androidTestImplementation(libs.androidx.junit)
   androidTestImplementation(libs.androidx.espresso.core)
   androidTestImplementation(libs.httpClient5)
+  androidTestImplementation(libs.kotlin.test.common)
+  androidTestImplementation(libs.kotlin.test.junit)
   androidTestImplementation(libs.squareup.moshi)
   androidTestImplementation(libs.squareup.moshi.kotlin)
   androidTestImplementation(libs.squareup.okio.fakefilesystem)
