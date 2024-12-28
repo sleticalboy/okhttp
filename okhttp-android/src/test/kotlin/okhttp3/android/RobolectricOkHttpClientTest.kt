@@ -40,7 +40,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(
-  sdk = [30],
+  sdk = [21, 26, 30, 33, 35],
 )
 class RobolectricOkHttpClientTest {
   private lateinit var context: Context
@@ -51,7 +51,7 @@ class RobolectricOkHttpClientTest {
     context = ApplicationProvider.getApplicationContext<Application>()
     client =
       OkHttpClient.Builder()
-        .cache(Cache("/cache".toPath(), 10_000_000, FakeFileSystem()))
+        .cache(Cache(FakeFileSystem(), "/cache".toPath(), 10_000_000))
         .build()
   }
 
